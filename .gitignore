@@ -1,0 +1,79 @@
+####################################
+# OS & General
+####################################
+.DS_Store
+Thumbs.db
+*.log
+*.class
+*.pyc
+*.swp
+.history/
+.svn/
+.atom/
+.swiftpm/
+migrate_working_dir/
+
+####################################
+# IDEs
+####################################
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+####################################
+# Flutter / Dart
+####################################
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+**/doc/api/
+
+####################################
+# Android
+####################################
+android/.gradle/
+android/app/build/
+android/local.properties
+android/key.properties
+*.keystore
+
+# Android build outputs
+*.apk
+*.aab
+*.ap_
+
+####################################
+# iOS
+####################################
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+ios/Flutter/.last_build_id
+
+####################################
+# Web
+####################################
+build/web/
+
+####################################
+# Coverage & Test
+####################################
+coverage/
+
+####################################
+# Temporary / Cache
+####################################
+*.lock
+*.tmp
+*.cache
+
+####################################
+# Distribution / Release
+####################################
+dist/
+release/

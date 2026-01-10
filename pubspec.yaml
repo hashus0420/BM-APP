@@ -1,0 +1,96 @@
+name: msret
+description: Flutter ile geliştirilen etkinlik takip uygulaması.
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI
+  cupertino_icons: ^1.0.6
+  shimmer: ^3.0.0
+
+  # HTTP ve veri yönetimi
+  supabase_flutter: ^2.5.10
+  flutter_secure_storage: ^9.2.2
+  connectivity_plus: ^7.0.0
+
+  # Takvim
+  table_calendar: ^3.0.9
+
+  # Tarih-saat ve çoklu dil
+  intl: ^0.20.2
+  flutter_localizations:
+    sdk: flutter
+
+  # State management
+  provider: ^6.0.5
+
+  # Lokal veri
+  shared_preferences: ^2.2.2
+  path_provider: ^2.1.4
+
+  # Fotoğraf alma
+  image_picker: ^1.1.1
+
+  # Formlar
+  flutter_form_builder: ^10.1.0
+
+  # Bildirimler
+  flutter_local_notifications: ^19.4.1
+  timezone: ^0.10.0
+
+  # Ayarlar
+  url_launcher: ^6.3.1
+  package_info_plus: ^9.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # Launcher ve Splash
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.1
+
+flutter:
+  uses-material-design: true
+  generate: true
+
+  assets:
+    # Uygulama genel logoları
+    - assets/images/logo.png
+
+    # Marka logoları (temel dosya zorunlu)
+    - assets/brand/logo.png
+
+# -------------- LAUNCHER ICON --------------
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/images/logo.png
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: assets/images/logo.png
+
+# -------------- SPLASH SCREEN --------------
+flutter_native_splash:
+  color: "#FFFFFF"
+  image: assets/images/logo.png
+  android: true
+  ios: true
+  android_12:
+    image: assets/images/logo.png
+    icon_background_color: "#FFFFFF"
+
+# -------------- ANALYSIS -------------------
+include: package:flutter_lints/flutter.yaml
+linter:
+  rules:
+    avoid_print: true
+    prefer_const_constructors: true
+    always_use_package_imports: true

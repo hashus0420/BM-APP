@@ -1,0 +1,82 @@
+name: msret
+description: Flutter ile geliştirilen etkinlik takip uygulaması.
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI
+  cupertino_icons: ^1.0.6
+
+  # HTTP ve veri yönetimi
+  supabase_flutter: ^2.5.10
+  flutter_secure_storage: ^9.2.2
+  connectivity_plus: ^6.0.5
+
+  # Takvim
+  table_calendar: ^3.0.9
+
+  # Tarih-saat ve çoklu dil
+  intl: ^0.20.2
+  flutter_localizations:
+    sdk: flutter
+
+  # State management
+  provider: ^6.0.5
+
+  # Lokal veri
+  shared_preferences: ^2.2.2
+
+  # Fotoğraf alma
+  image_picker: ^1.1.1
+
+  # Formlar
+  flutter_form_builder: ^10.1.0
+
+  # Bildirimler (Android 12+/13 için inexact schedule uyumlu)
+  flutter_local_notifications: ^19.4.1
+  timezone: ^0.10.0
+
+  # Ayarlar
+  url_launcher: ^6.3.1
+  package_info_plus: ^8.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+  # İkon ve Splash
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.4.1
+
+  http: any
+flutter:
+  uses-material-design: true
+  generate: true
+  assets:
+    - assets/images/logo.png
+
+# LAUNCHER ICON
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/images/logo.png
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: assets/images/logo.png
+
+# SPLASH
+flutter_native_splash:
+  color: "#FFFFFF"
+  image: assets/images/logo.png
+  android: true
+  ios: true
+  android_12:
+    image: assets/images/logo.png
+    icon_background_color: "#FFFFFF"

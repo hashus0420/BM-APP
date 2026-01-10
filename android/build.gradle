@@ -1,0 +1,61 @@
+// Top-level build.gradle (Groovy)
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    // DİKKAT: Buraya AGP/Kotlin classpath EKLEME!
+    // settings.gradle içindeki `plugins {}` bunları yüklüyor.
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+/**
+ * Proje genelinde SDK değerleri.
+ * (Bazı eski pluginler bunları okuyor.)
+ */
+ext {
+    compileSdkVersion = 35
+    targetSdkVersion  = 35
+    minSdkVersion     = 21
+
+    // Flutter anahtarları (bazı pluginler bunlara bakıyor)
+    flutter = [
+        compileSdkVersion: 35,
+        targetSdkVersion : 35,
+        minSdkVersion    : 21
+    ]
+}
+
+/**
+ * Alt projelerde Android DSL ilk yüklenirken ortak değerleri uygula.
+ */
+subprojects { proj ->
+    proj.plugins.withId("com.android.application") {
+        proj.android {
+            compileSdkVersion rootProject.ext.compileSdkVersion
+            defaultConfig {
+                targetSdk rootProject.ext.targetSdkVersion
+                minSdk rootProject.ext.minSdkVersion
+            }
+        }
+    }
+    proj.plugins.withId("com.android.library") {
+        proj.android {
+            compileSdkVersion rootProject.ext.compileSdkVersion
+            defaultConfig {
+                minSdk rootProject.ext.minSdkVersion
+            }
+        }
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.layout.buildDirectory
+}
