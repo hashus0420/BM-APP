@@ -1,17 +1,21 @@
-// lib/pages/common/event_detail_page.dart
+// lib/events/pages/event_detail_page.dart
+
 import 'dart:async';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../models/event_model.dart';
+import 'package:msret/core/services/notification_service.dart';
+import 'package:msret/events/model/event_model.dart';
 
 enum UserRole { admin, teacher, student }
 
 /* ====================== DESIGN TOKENS ====================== */
+
 const kNavy = Color(0xFF113A7D);
 const kSky = Color(0xFF57C3F6);
 const kTeal = Color(0xFF00796B);
@@ -24,31 +28,44 @@ const kAccent = kSky;
 const kOk = kTeal;
 
 const r12 = 12.0;
+const r14 = 14.0;
 const r16 = 16.0;
 const r20 = 20.0;
-const r14 = 14.0;
 
 const kSpace1 = 8.0;
 const kSpace2 = 12.0;
 const kSpace3 = 16.0;
 const kSpace4 = 20.0;
 
-// ==== LAYOUT TUNING ====
 const double kHeaderHeight = 140;
 const double kUiScale = 1.12;
 
-// Tipografi
-TextStyle get _titleStyle =>
-    TextStyle(fontSize: 20 * kUiScale, fontWeight: FontWeight.w700, color: kInk);
-TextStyle get _labelStyle =>
-    TextStyle(fontSize: 12 * kUiScale, color: Colors.grey);
-TextStyle get _valueStyle =>
-    TextStyle(fontSize: 18 * kUiScale, fontWeight: FontWeight.w800, color: kInk);
+TextStyle get _titleStyle => TextStyle(
+  fontSize: 20 * kUiScale,
+  fontWeight: FontWeight.w700,
+  color: kInk,
+);
+
+TextStyle get _labelStyle => TextStyle(
+  fontSize: 12 * kUiScale,
+  color: Colors.grey,
+);
+
+TextStyle get _valueStyle => TextStyle(
+  fontSize: 18 * kUiScale,
+  fontWeight: FontWeight.w800,
+  color: kInk,
+);
 
 /* ====================== PAGE ====================== */
+
 class EventDetailPage extends StatefulWidget {
   final EventModel event;
-  const EventDetailPage({super.key, required this.event});
+
+  const EventDetailPage({
+    super.key,
+    required this.event,
+  });
 
   @override
   State<EventDetailPage> createState() => _EventDetailPageState();
@@ -57,20 +74,23 @@ class EventDetailPage extends StatefulWidget {
 class _EventDetailPageState extends State<EventDetailPage>
     with SingleTickerProviderStateMixin {
   final supabase = Supabase.instance.client;
+  final NotificationService _notificationService = NotificationService();
+
   late final TabController _tabs;
 
   Timer? _countdownTimer;
   Timer? _checkinPoller;
+
   Duration _timeLeft = Duration.zero;
 
   int? _currentUserId;
   String? _currentUserUid;
 
   UserRole _currentUserRole = UserRole.student;
+
   bool get _isAdmin => _currentUserRole == UserRole.admin;
   bool get _isTeacher => _currentUserRole == UserRole.teacher;
 
-  // Tüm yönetim yetkileri: admin || etkinlik sahibi || öğretmen
   bool get _canManage => _isAdmin || _isEventOwner || _isTeacher;
 
   DateTime? _startsAt;
@@ -82,72 +102,115 @@ class _EventDetailPageState extends State<EventDetailPage>
   String? _ownerEmail;
 
   bool get _isEventOwner {
-    final idMatch =
-    (_ownerId != null && _currentUserId != null && _ownerId == _currentUserId);
-    final uidMatch =
-    (_ownerUid != null && _currentUserUid != null && _ownerUid == _currentUserUid);
+    final idMatch = _ownerId != null &&
+        _currentUserId != null &&
+        _ownerId == _currentUserId;
+
+    final uidMatch = _ownerUid != null &&
+        _currentUserUid != null &&
+        _ownerUid == _currentUserUid;
+
     return idMatch || uidMatch;
   }
 
   bool _canCheckin = false;
   bool _hasAlreadyApplied = false;
+
   int _registeredCount = 0;
+
   List<Map<String, dynamic>> _participants = [];
 
   bool _loading = true;
   String _search = '';
 
-  // Local overrides
-  String? _ovTitle, _ovLocation, _ovImageUrl, _ovDescription;
+  String? _ovTitle;
+  String? _ovLocation;
+  String? _ovImageUrl;
+  String? _ovDescription;
   int? _ovPoint;
   DateTime? _ovEventDate;
 
-  // Realtime
   RealtimeChannel? _regChannel;
 
   String get _dispTitle => _ovTitle ?? widget.event.title;
   String get _dispLocation => _ovLocation ?? widget.event.location;
   String? get _dispImage => _ovImageUrl ?? widget.event.imageUrl;
-  String get _dispDescription => _ovDescription ?? (widget.event.description ?? '—');
+
+  String get _dispDescription =>
+      _ovDescription ?? (widget.event.description ?? '—');
+
   int get _dispPoint => _ovPoint ?? widget.event.point;
   DateTime get _dispEventDate => _ovEventDate ?? widget.event.eventDate;
 
   @override
   void initState() {
     super.initState();
+
     _tabs = TabController(length: 2, vsync: this);
+
     _calculateTimeLeft();
 
-    // frame-sonsrası setState — stretch hatasını tetiklememesi için
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+    _countdownTimer = Timer.periodic(
+      const Duration(seconds: 1),
+          (_) {
         if (!mounted) return;
-        setState(_calculateTimeLeft);
-      });
-    });
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(_calculateTimeLeft);
+        });
+      },
+    );
 
     _bootstrap();
     _setupRealtime();
   }
 
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    _checkinPoller?.cancel();
+
+    _tabs.dispose();
+
+    _regChannel?.unsubscribe();
+
+    if (_regChannel != null) {
+      supabase.removeChannel(_regChannel!);
+    }
+
+    super.dispose();
+  }
+
   Future<void> _bootstrap() async {
+    try {
+      await _notificationService.init();
+    } catch (_) {}
+
     await _loadUserInfo();
+
     await Future.wait([
       _fetchParticipants(),
       _refreshCanCheckin(),
       _loadEventMeta(),
     ]);
+
     await _checkIfAlreadyApplied();
-    _checkinPoller =
-        Timer.periodic(const Duration(seconds: 20), (_) => _refreshCanCheckin());
+
+    _checkinPoller = Timer.periodic(
+      const Duration(seconds: 20),
+          (_) => _refreshCanCheckin(),
+    );
+
     if (!mounted) return;
+
     setState(() => _loading = false);
   }
 
   void _setupRealtime() {
     final id = widget.event.id;
     if (id == null) return;
+
     _regChannel = supabase
         .channel('event_regs_$id')
         .onPostgresChanges(
@@ -155,7 +218,10 @@ class _EventDetailPageState extends State<EventDetailPage>
       schema: 'public',
       table: 'event_registrations',
       filter: PostgresChangeFilter(
-          type: PostgresChangeFilterType.eq, column: 'event_id', value: '$id'),
+        type: PostgresChangeFilterType.eq,
+        column: 'event_id',
+        value: '$id',
+      ),
       callback: (_) => _fetchParticipants(),
     )
         .onPostgresChanges(
@@ -163,7 +229,10 @@ class _EventDetailPageState extends State<EventDetailPage>
       schema: 'public',
       table: 'event_registrations',
       filter: PostgresChangeFilter(
-          type: PostgresChangeFilterType.eq, column: 'event_id', value: '$id'),
+        type: PostgresChangeFilterType.eq,
+        column: 'event_id',
+        value: '$id',
+      ),
       callback: (_) => _fetchParticipants(),
     )
         .onPostgresChanges(
@@ -171,26 +240,17 @@ class _EventDetailPageState extends State<EventDetailPage>
       schema: 'public',
       table: 'event_registrations',
       filter: PostgresChangeFilter(
-          type: PostgresChangeFilterType.eq, column: 'event_id', value: '$id'),
+        type: PostgresChangeFilterType.eq,
+        column: 'event_id',
+        value: '$id',
+      ),
       callback: (_) => _fetchParticipants(),
     )
         .subscribe();
   }
 
-  @override
-  void dispose() {
-    _countdownTimer?.cancel();
-    _checkinPoller?.cancel();
-    _tabs.dispose();
-    // Kanalı düzgün kapat
-    _regChannel?.unsubscribe();
-    if (_regChannel != null) {
-      supabase.removeChannel(_regChannel!);
-    }
-    super.dispose();
-  }
-
   /* ====================== HELPERS ====================== */
+
   double sx(BuildContext c) {
     final scaled = MediaQuery.textScalerOf(c).scale(1.0);
     return scaled.clamp(1.0, 1.3);
@@ -201,14 +261,23 @@ class _EventDetailPageState extends State<EventDetailPage>
     _timeLeft = d.isNegative ? Duration.zero : d;
   }
 
-  String _formatTime(DateTime? dt) => dt == null ? '-' : DateFormat('HH:mm').format(dt);
+  String _formatTime(DateTime? dt) {
+    if (dt == null) return '-';
+    return DateFormat('HH:mm').format(dt);
+  }
 
   String _formatCountdown(Duration d) {
     if (d == Duration.zero) return 'Etkinlik başladı / bitti';
-    final days = d.inDays, h = d.inHours % 24, m = d.inMinutes % 60, s = d.inSeconds % 60;
+
+    final days = d.inDays;
+    final h = d.inHours % 24;
+    final m = d.inMinutes % 60;
+    final s = d.inSeconds % 60;
+
     if (days > 0) return '$days g $h s $m d';
     if (h > 0) return '$h s $m d $s sn';
     if (m > 0) return '$m d $s sn';
+
     return '$s sn';
   }
 
@@ -218,7 +287,9 @@ class _EventDetailPageState extends State<EventDetailPage>
     } else {
       HapticFeedback.selectionClick();
     }
+
     if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
@@ -228,25 +299,36 @@ class _EventDetailPageState extends State<EventDetailPage>
     );
   }
 
-  Future<void> _notify(String title, String message,
-      {bool error = false, IconData? icon}) async {
+  Future<void> _notify(
+      String title,
+      String message, {
+        bool error = false,
+        IconData? icon,
+      }) async {
     if (!mounted) return;
+
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(r20),
+        ),
         title: Row(
           children: [
-            Icon(icon ?? (error ? Icons.error_outline : Icons.info_outline),
-                color: error ? kWarn : kPrimary),
+            Icon(
+              icon ?? (error ? Icons.error_outline : Icons.info_outline),
+              color: error ? kWarn : kPrimary,
+            ),
             const SizedBox(width: 8),
-            Text(title),
+            Flexible(child: Text(title)),
           ],
         ),
         content: Text(message),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
-          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Tamam')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Tamam'),
+          ),
         ],
       ),
     );
@@ -255,19 +337,84 @@ class _EventDetailPageState extends State<EventDetailPage>
   bool _isYoklamaClosedError(Object e) {
     if (e is PostgrestException) {
       if ((e.code ?? '').toUpperCase() == 'P0001') return true;
+
       final msg = (e.message ?? '').toLowerCase();
       if (msg.contains('yoklama penceresi kapalı')) return true;
     }
+
     final s = e.toString().toLowerCase();
+
     return s.contains('yoklama penceresi kapalı') || s.contains('p0001');
   }
 
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  /* ====================== NOTIFICATION HELPERS ====================== */
+
+  Future<void> _sendApplicationNotification({required bool applied}) async {
+    await _notificationService.showNow(
+      title: applied ? 'Başvurunuz Alındı' : 'Başvurunuz İptal Edildi',
+      body: applied
+          ? '$_dispTitle etkinliği için başvurunuz başarıyla alındı.'
+          : '$_dispTitle etkinliği için başvurunuz iptal edildi.',
+      payload: 'application:${widget.event.id}',
+    );
+  }
+
+  Future<void> _sendAttendanceNotification({
+    required bool joined,
+    required bool isSelfAction,
+  }) async {
+    if (!isSelfAction) return;
+
+    await _notificationService.showNow(
+      title: joined ? 'Katılımınız Kaydedildi' : 'Katılımınız Geri Alındı',
+      body: joined
+          ? '$_dispTitle etkinliğine katılımınız başarıyla kaydedildi.'
+          : '$_dispTitle etkinliği için katılımınız geri alındı.',
+      payload: 'attendance:${widget.event.id}',
+    );
+  }
+
+  Future<void> _cancelEventNotificationsIfPossible() async {
+    final eventId = widget.event.id;
+    if (eventId == null) return;
+
+    try {
+      await _notificationService.cancelEventReminders(eventId);
+    } catch (_) {}
+  }
+
+  Future<void> _rescheduleEventNotificationsIfPossible() async {
+    final eventId = widget.event.id;
+    if (eventId == null) return;
+
+    try {
+      await _notificationService.cancelEventReminders(eventId);
+
+      if (_dispEventDate.isAfter(DateTime.now())) {
+        await _notificationService.scheduleEventReminderPack(
+          eventId: eventId,
+          eventTitle: _dispTitle,
+          eventDate: _dispEventDate,
+          location: _dispLocation,
+        );
+      }
+    } catch (_) {}
+  }
+
   /* ====================== DATA ====================== */
+
   Future<void> _loadUserInfo() async {
     final prefs = await SharedPreferences.getInstance();
+
     final roleStr = (prefs.getString('role') ?? 'student').trim();
+
     _currentUserId = prefs.getInt('user_id');
     _currentUserUid = prefs.getString('user_uid');
+
     _currentUserRole = UserRole.values.firstWhere(
           (e) => e.name == roleStr,
       orElse: () => UserRole.student,
@@ -276,6 +423,7 @@ class _EventDetailPageState extends State<EventDetailPage>
 
   Future<void> _loadEventMeta() async {
     if (widget.event.id == null) return;
+
     try {
       final row = await supabase
           .from('events')
@@ -288,6 +436,7 @@ class _EventDetailPageState extends State<EventDetailPage>
 
       if (row != null) {
         final cb = row['created_by'];
+
         if (cb is int) {
           ownerId = cb;
         } else if (cb is String) {
@@ -295,7 +444,9 @@ class _EventDetailPageState extends State<EventDetailPage>
         }
       }
 
-      String? ownerName, ownerEmail;
+      String? ownerName;
+      String? ownerEmail;
+
       try {
         if (ownerId != null) {
           final u = await supabase
@@ -303,6 +454,7 @@ class _EventDetailPageState extends State<EventDetailPage>
               .select('id, name, email')
               .eq('id', ownerId)
               .maybeSingle();
+
           ownerName = (u?['name'] as String?)?.trim();
           ownerEmail = (u?['email'] as String?)?.trim();
         } else if (ownerUid != null) {
@@ -311,18 +463,23 @@ class _EventDetailPageState extends State<EventDetailPage>
               .select('id, name, email, auth_uid')
               .eq('auth_uid', ownerUid)
               .maybeSingle();
+
           ownerName = (u?['name'] as String?)?.trim();
           ownerEmail = (u?['email'] as String?)?.trim();
         }
       } catch (_) {}
 
+      if (!mounted) return;
+
       setState(() {
         _startsAt = row?['starts_at'] != null
             ? DateTime.tryParse('${row!['starts_at']}')?.toLocal()
             : null;
+
         _endsAt = row?['ends_at'] != null
             ? DateTime.tryParse('${row!['ends_at']}')?.toLocal()
             : null;
+
         _ownerId = ownerId;
         _ownerUid = ownerUid;
         _ownerName = ownerName;
@@ -333,11 +490,18 @@ class _EventDetailPageState extends State<EventDetailPage>
 
   Future<void> _refreshCanCheckin() async {
     if (widget.event.id == null) return;
+
     try {
-      final res =
-      await supabase.rpc('can_checkin_int', params: {'p_event': widget.event.id});
+      final res = await supabase.rpc(
+        'can_checkin_int',
+        params: {'p_event': widget.event.id},
+      );
+
+      if (!mounted) return;
+
       setState(() => _canCheckin = (res as bool?) ?? false);
     } catch (_) {
+      if (!mounted) return;
       setState(() => _canCheckin = false);
     }
   }
@@ -345,6 +509,7 @@ class _EventDetailPageState extends State<EventDetailPage>
   Future<void> _fetchParticipants() async {
     final id = widget.event.id;
     if (id == null) return;
+
     try {
       final data = await supabase
           .from('event_registrations')
@@ -353,8 +518,10 @@ class _EventDetailPageState extends State<EventDetailPage>
 
       final list = (data as List).map<Map<String, dynamic>>((e) {
         final s = e['student_id'];
+
         final sid = s is Map ? (s['id'] ?? s['user_id'] ?? s['student_id']) : s;
         final name = s is Map ? (s['name'] ?? 'İsimsiz') : 'İsimsiz';
+
         return {
           'id': e['id'],
           'studentId': sid is int ? sid : int.tryParse('$sid') ?? -1,
@@ -365,24 +532,32 @@ class _EventDetailPageState extends State<EventDetailPage>
 
       list.sort((a, b) => (b['id'] as int).compareTo(a['id'] as int));
 
+      if (!mounted) return;
+
       setState(() {
         _participants = list;
         _registeredCount = list.length;
       });
     } catch (e) {
+      if (!mounted) return;
       _notify('Hata', 'Katılımcılar alınamadı: $e', error: true);
     }
   }
 
   Future<void> _checkIfAlreadyApplied() async {
     final uid = _currentUserId;
+
     if (uid == null || widget.event.id == null) return;
+
     try {
       final data = await supabase
           .from('event_registrations')
           .select('id')
           .eq('event_id', widget.event.id!)
           .eq('student_id', uid);
+
+      if (!mounted) return;
+
       setState(() => _hasAlreadyApplied = (data as List).isNotEmpty);
     } catch (_) {}
   }
@@ -391,11 +566,21 @@ class _EventDetailPageState extends State<EventDetailPage>
 
   Future<void> _applyToEvent() async {
     final uid = _currentUserId;
+
     if (uid == null) {
-      return _notify('Giriş Gerekli', 'Önce giriş yapmalısınız.', error: true);
+      return _notify(
+        'Giriş Gerekli',
+        'Önce giriş yapmalısınız.',
+        error: true,
+      );
     }
+
     if (widget.event.id == null) {
-      return _notify('Eksik Bilgi', 'Etkinlik bilgisi eksik.', error: true);
+      return _notify(
+        'Eksik Bilgi',
+        'Etkinlik bilgisi eksik.',
+        error: true,
+      );
     }
 
     try {
@@ -405,31 +590,48 @@ class _EventDetailPageState extends State<EventDetailPage>
         {
           'event_id': widget.event.id,
           'student_id': uid,
-          'is_participated': false
+          'is_participated': false,
         },
         onConflict: 'event_id,student_id',
         ignoreDuplicates: true,
       )
           .select()
           .maybeSingle();
+
+      if (!mounted) return;
+
       setState(() => _hasAlreadyApplied = true);
-      if (resp != null) await _fetchParticipants();
+
+      if (resp != null) {
+        await _fetchParticipants();
+      }
+
       await _toast('Başvurunuz alındı 🎉');
+      await _sendApplicationNotification(applied: true);
     } catch (e) {
       if (e.toString().contains('23505')) {
+        if (!mounted) return;
+
         setState(() => _hasAlreadyApplied = true);
-        return _toast('Bu etkinliğe zaten başvurdunuz.');
+        await _toast('Bu etkinliğe zaten başvurdunuz.');
+        return;
       }
-      _toast('İşlem sırasında bir sorun oluştu', error: true);
+
+      await _toast('İşlem sırasında bir sorun oluştu', error: true);
     }
   }
 
-  // ÖĞRENCİ: Başvurusunu iptal et
   Future<void> _cancelApplication() async {
     final uid = _currentUserId;
+
     if (uid == null || widget.event.id == null) {
-      return _notify('Giriş Gerekli', 'Önce giriş yapmalısınız.', error: true);
+      return _notify(
+        'Giriş Gerekli',
+        'Önce giriş yapmalısınız.',
+        error: true,
+      );
     }
+
     try {
       await supabase
           .from('event_registrations')
@@ -437,34 +639,45 @@ class _EventDetailPageState extends State<EventDetailPage>
           .eq('event_id', widget.event.id!)
           .eq('student_id', uid);
 
-      // varsa puan kaydını da temizleyelim (opsiyonel)
       await supabase
           .from('points')
           .delete()
           .eq('event_id', widget.event.id!)
           .eq('student_id', uid);
 
+      if (!mounted) return;
+
       setState(() => _hasAlreadyApplied = false);
+
       await _fetchParticipants();
       await _toast('Başvurunuz iptal edildi');
-    } catch (e) {
-      _toast('Başvuru iptal edilemedi', error: true);
+      await _sendApplicationNotification(applied: false);
+    } catch (_) {
+      await _toast('Başvuru iptal edilemedi', error: true);
     }
   }
 
-  // force=true ise kapalı pencereye rağmen yöneticinin/öğretmenin onay verebilmesi sağlanır
-  Future<void> _joinLeave(bool join, {int? userId, int? regId, bool force = false}) async {
+  Future<void> _joinLeave(
+      bool join, {
+        int? userId,
+        int? regId,
+        bool force = false,
+      }) async {
     final uid = userId ?? _currentUserId;
+
     if (uid == null || widget.event.id == null) {
-      return _notify('Giriş Gerekli', 'Önce giriş yapmalısınız.', error: true);
+      return _notify(
+        'Giriş Gerekli',
+        'Önce giriş yapmalısınız.',
+        error: true,
+      );
     }
 
-    // Öğrenciler force kullanamaz; yönetici/sahip/öğretmen kullanabilir
     final mayForce = force && _canManage;
 
-    // Normalde pencere kapalıysa uyar; fakat mayForce ise devam et
     if (!mayForce) {
       await _refreshCanCheckin();
+
       if (!_canCheckin) {
         return _notify(
           'Yoklama Kapalı',
@@ -475,7 +688,6 @@ class _EventDetailPageState extends State<EventDetailPage>
     }
 
     Future<void> directUpdate() async {
-      // Kayıt yoksa oluştur
       final existing = await supabase
           .from('event_registrations')
           .select('id')
@@ -483,54 +695,72 @@ class _EventDetailPageState extends State<EventDetailPage>
           .eq('student_id', uid)
           .maybeSingle();
 
-      final int useRegId;
       if (existing == null) {
-        final inserted = await supabase.from('event_registrations').insert({
+        await supabase.from('event_registrations').insert({
           'event_id': widget.event.id!,
           'student_id': uid,
           'is_participated': join,
           'recorded_by': _currentUserId,
         }).select('id').single();
-        useRegId = inserted['id'] as int;
       } else {
-        useRegId = (existing['id'] as int);
-        await supabase
-            .from('event_registrations')
-            .update({'is_participated': join, 'recorded_by': _currentUserId})
-            .eq('id', useRegId);
+        final useRegId = existing['id'] as int;
+
+        await supabase.from('event_registrations').update({
+          'is_participated': join,
+          'recorded_by': _currentUserId,
+        }).eq('id', useRegId);
       }
     }
 
     try {
       if (mayForce) {
-        // Önce force RPC var mı dene
         final rpcName = join ? 'join_event_force_int' : 'leave_event_force_int';
+
         try {
-          await supabase.rpc(rpcName, params: {'p_user_id': uid, 'p_event': widget.event.id});
+          await supabase.rpc(
+            rpcName,
+            params: {
+              'p_user_id': uid,
+              'p_event': widget.event.id,
+            },
+          );
         } catch (_) {
-          // Yoksa doğrudan tablo güncelle
           await directUpdate();
         }
       } else {
-        // Normal RPC
         if (join) {
-          await supabase
-              .rpc('join_event_int', params: {'p_user_id': uid, 'p_event': widget.event.id});
+          await supabase.rpc(
+            'join_event_int',
+            params: {
+              'p_user_id': uid,
+              'p_event': widget.event.id,
+            },
+          );
         } else {
-          await supabase
-              .rpc('leave_event_int', params: {'p_user_id': uid, 'p_event': widget.event.id});
+          await supabase.rpc(
+            'leave_event_int',
+            params: {
+              'p_user_id': uid,
+              'p_event': widget.event.id,
+            },
+          );
         }
 
-        // UI tutarlılığı için yine de registration satırını güncelle
         if (regId != null) {
           await supabase
               .from('event_registrations')
-              .update({'is_participated': join, 'recorded_by': _currentUserId})
+              .update({
+            'is_participated': join,
+            'recorded_by': _currentUserId,
+          })
               .eq('id', regId);
         } else {
           await supabase
               .from('event_registrations')
-              .update({'is_participated': join, 'recorded_by': uid})
+              .update({
+            'is_participated': join,
+            'recorded_by': uid,
+          })
               .eq('event_id', widget.event.id!)
               .eq('student_id', uid);
         }
@@ -538,72 +768,138 @@ class _EventDetailPageState extends State<EventDetailPage>
 
       await _fetchParticipants();
       await _refreshCanCheckin();
+
+      final isSelfAction = uid == _currentUserId;
+
       await _toast(join ? 'Yoklama verildi' : 'Yoklama geri alındı');
+
+      await _sendAttendanceNotification(
+        joined: join,
+        isSelfAction: isSelfAction,
+      );
     } catch (e) {
-      // Eğer kapalı pencere hatası geldiyse ve yetkili ise fallback
       if (_isYoklamaClosedError(e) && _canManage) {
         try {
           await directUpdate();
           await _fetchParticipants();
-          return _toast(join ? 'Yoklama verildi (force)' : 'Yoklama geri alındı (force)');
+
+          final isSelfAction = uid == _currentUserId;
+
+          await _toast(
+            join ? 'Yoklama verildi (force)' : 'Yoklama geri alındı (force)',
+          );
+
+          await _sendAttendanceNotification(
+            joined: join,
+            isSelfAction: isSelfAction,
+          );
+
+          return;
         } catch (ee) {
-          return _notify('Hata', 'Yoklama güncellenemedi: $ee', error: true);
+          return _notify(
+            'Hata',
+            'Yoklama güncellenemedi: $ee',
+            error: true,
+          );
         }
       }
-      _notify('Hata', 'Yoklama güncellenemedi: $e', error: true);
+
+      _notify(
+        'Hata',
+        'Yoklama güncellenemedi: $e',
+        error: true,
+      );
     }
   }
 
   Future<void> _kickParticipant(int regId, int studentId) async {
     if (!_canManage) {
-      return _notify('Yetki Yok', 'Katılımcı çıkarmak için yetkiniz yok.', error: true);
+      return _notify(
+        'Yetki Yok',
+        'Katılımcı çıkarmak için yetkiniz yok.',
+        error: true,
+      );
     }
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(r20),
+        ),
         title: const Text('Katılımcıyı Çıkar'),
-        content: const Text('Bu katılımcı etkinlikten çıkarılacak. Devam edilsin mi?'),
+        content: const Text(
+          'Bu katılımcı etkinlikten çıkarılacak. Devam edilsin mi?',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('İptal')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Çıkar')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('İptal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Çıkar'),
+          ),
         ],
       ),
     );
+
     if (ok != true) return;
+
     try {
       await supabase.from('event_registrations').delete().eq('id', regId);
+
       await supabase
           .from('points')
           .delete()
           .eq('event_id', widget.event.id!)
           .eq('student_id', studentId);
+
       await _fetchParticipants();
       await _toast('Katılımcı çıkarıldı');
-    } catch (e) {
-      _toast('Katılımcı çıkarılamadı', error: true);
+    } catch (_) {
+      await _toast('Katılımcı çıkarılamadı', error: true);
     }
   }
 
   Future<void> _markAll(bool present) async {
     if (!_canManage) {
-      return _notify('Yetki Yok', 'Bu işlem için yetkiniz yok.', error: true);
+      return _notify(
+        'Yetki Yok',
+        'Bu işlem için yetkiniz yok.',
+        error: true,
+      );
     }
-    // Kapalıysa da force ile devam
+
     try {
       for (final p in _participants) {
         final cur = p['attendance'] ?? false;
+
         if (cur == present) continue;
-        await _joinLeave(present,
-            userId: p['studentId'] as int, regId: p['id'] as int, force: true);
+
+        await _joinLeave(
+          present,
+          userId: p['studentId'] as int,
+          regId: p['id'] as int,
+          force: true,
+        );
       }
+
       await supabase
           .from('event_registrations')
-          .update({'is_participated': present, 'recorded_by': _currentUserId})
+          .update({
+        'is_participated': present,
+        'recorded_by': _currentUserId,
+      })
           .eq('event_id', widget.event.id!);
+
       await _fetchParticipants();
+
       await _toast(
-          present ? 'Tümü katıldı olarak işaretlendi' : 'Tümü katılmadı olarak işaretlendi');
+        present
+            ? 'Tümü katıldı olarak işaretlendi'
+            : 'Tümü katılmadı olarak işaretlendi',
+      );
     } catch (e) {
       _notify('Hata', 'Toplu işlem başarısız: $e', error: true);
     }
@@ -611,64 +907,120 @@ class _EventDetailPageState extends State<EventDetailPage>
 
   Future<void> _deleteEvent() async {
     if (!_canManage) {
-      return _notify('Yetki Yok', 'Sadece admin/öğretmen/sahip silebilir.', error: true);
+      return _notify(
+        'Yetki Yok',
+        'Sadece admin/öğretmen/sahip silebilir.',
+        error: true,
+      );
     }
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(r20),
+        ),
         title: const Text('Etkinliği Sil'),
-        content: const Text('Etkinlik ve tüm ilişkili kayıtlar silinecek. Emin misiniz?'),
+        content: const Text(
+          'Etkinlik ve tüm ilişkili kayıtlar silinecek. Emin misiniz?',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('İptal')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sil')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('İptal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sil'),
+          ),
         ],
       ),
     );
+
     if (ok != true) return;
+
     try {
+      await _cancelEventNotificationsIfPossible();
+
       await supabase.from('points').delete().eq('event_id', widget.event.id!);
-      await supabase.from('event_registrations').delete().eq('event_id', widget.event.id!);
+
+      await supabase
+          .from('event_registrations')
+          .delete()
+          .eq('event_id', widget.event.id!);
+
       await supabase.from('events').delete().eq('id', widget.event.id!);
+
       if (!mounted) return;
+
       await _toast('Etkinlik silindi');
+
       Navigator.pop(context);
-    } catch (e) {
-      _toast('Etkinlik silinemedi', error: true);
+    } catch (_) {
+      await _toast('Etkinlik silinemedi', error: true);
     }
   }
 
   Future<void> _toggleCheckin() async {
     if (!_canManage) {
       return _notify(
-          'Yetki Yok', 'Yalnızca öğretmen/sahip veya admin değiştirebilir.', error: true);
+        'Yetki Yok',
+        'Yalnızca öğretmen/sahip veya admin değiştirebilir.',
+        error: true,
+      );
     }
+
     final newState = !_canCheckin;
 
     try {
-      final res =
-      await supabase.rpc('toggle_checkin_int', params: {'p_event': widget.event.id});
+      final res = await supabase.rpc(
+        'toggle_checkin_int',
+        params: {'p_event': widget.event.id},
+      );
+
       if (res is bool) {
+        if (!mounted) return;
+
         setState(() => _canCheckin = res);
+
         return _toast(res ? 'Yoklama açıldı' : 'Yoklama kapatıldı');
       }
     } catch (_) {}
 
     try {
-      await supabase
-          .rpc('set_checkin_open', params: {'p_event': widget.event.id, 'p_open': newState});
+      await supabase.rpc(
+        'set_checkin_open',
+        params: {
+          'p_event': widget.event.id,
+          'p_open': newState,
+        },
+      );
+
+      if (!mounted) return;
+
       setState(() => _canCheckin = newState);
+
       return _toast(newState ? 'Yoklama açıldı' : 'Yoklama kapatıldı');
     } catch (e) {
-      return _notify('Hata', 'Yoklama durumu değiştirilemedi: $e', error: true);
+      return _notify(
+        'Hata',
+        'Yoklama durumu değiştirilemedi: $e',
+        error: true,
+      );
     }
   }
 
-  // Takvime eklemek için ICS
   Future<void> _exportIcs() async {
     final s = _startsAt ??
-        DateTime(_dispEventDate.year, _dispEventDate.month, _dispEventDate.day, 9);
+        DateTime(
+          _dispEventDate.year,
+          _dispEventDate.month,
+          _dispEventDate.day,
+          9,
+        );
+
     final e = _endsAt ?? s.add(const Duration(hours: 1));
+
     final ics = '''
 BEGIN:VCALENDAR
 VERSION:2.0
@@ -681,27 +1033,56 @@ DESCRIPTION:$_dispDescription
 END:VEVENT
 END:VCALENDAR
 ''';
+
     await Clipboard.setData(ClipboardData(text: ics));
-    await _toast('ICS panoya kopyalandı. Takvime yapıştırarak ekleyebilirsin.');
+
+    await _toast(
+      'ICS panoya kopyalandı. Takvime yapıştırarak ekleyebilirsin.',
+    );
   }
 
-  bool _isSameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
-
-  // Rapor: sadece katılanlar
   Future<void> _copyPresentList() async {
-    final list = _participants.where((p) => (p['attendance'] ?? false) == true);
+    final list = _participants.where(
+          (p) => (p['attendance'] ?? false) == true,
+    );
+
     final buf = StringBuffer()..writeln('name');
+
     for (final p in list) {
       final name = (p['name'] ?? '').toString().replaceAll(',', ' ');
       buf.writeln(name);
     }
+
     await Clipboard.setData(ClipboardData(text: buf.toString()));
-    _notify('Katılanlar Kopyalandı', 'Sadece katılanların listesi panoya kopyalandı.',
-        icon: Icons.playlist_add_check);
+
+    _notify(
+      'Katılanlar Kopyalandı',
+      'Sadece katılanların listesi panoya kopyalandı.',
+      icon: Icons.playlist_add_check,
+    );
+  }
+
+  Future<void> _copyCsv() async {
+    final buf = StringBuffer()..writeln('name,attendance');
+
+    for (final p in _participants) {
+      final name = (p['name'] ?? '').toString().replaceAll(',', ' ');
+      final att = (p['attendance'] ?? false) ? 'joined' : 'left';
+
+      buf.writeln('$name,$att');
+    }
+
+    await Clipboard.setData(ClipboardData(text: buf.toString()));
+
+    _notify(
+      'CSV Kopyalandı',
+      'Katılımcı listesi panoya kopyalandı.',
+      icon: Icons.table_chart_outlined,
+    );
   }
 
   /* ====================== BUILD ====================== */
+
   @override
   Widget build(BuildContext context) {
     final canManage = _canManage;
@@ -730,24 +1111,31 @@ END:VCALENDAR
           await _checkIfAlreadyApplied();
         },
         child: NestedScrollView(
-          physics:
-          const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
           headerSliverBuilder: (ctx, scrolled) => [
             SliverAppBar(
               pinned: true,
-              stretch: false, // stretch kapalı
+              stretch: false,
               expandedHeight: kHeaderHeight,
-              title: Text(_dispTitle,
-                  style:
-                  TextStyle(color: Colors.white, fontSize: 18 * sx(context))),
+              title: Text(
+                _dispTitle,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18 * sx(context),
+                ),
+              ),
               backgroundColor: kPrimary,
               actionsIconTheme: const IconThemeData(color: Colors.white),
               actions: [
                 if (canManage)
                   IconButton(
-                    tooltip: _canCheckin ? 'Yoklamayı Kapat' : 'Yoklamayı Aç',
-                    icon:
-                    Icon(_canCheckin ? Icons.lock_open : Icons.lock_clock),
+                    tooltip:
+                    _canCheckin ? 'Yoklamayı Kapat' : 'Yoklamayı Aç',
+                    icon: Icon(
+                      _canCheckin ? Icons.lock_open : Icons.lock_clock,
+                    ),
                     onPressed: _toggleCheckin,
                   ),
                 if (canManage)
@@ -781,10 +1169,6 @@ END:VCALENDAR
                   ),
               ],
               flexibleSpace: FlexibleSpaceBar(
-                stretchModes: const [
-                  StretchMode.blurBackground,
-                  StretchMode.zoomBackground
-                ],
                 background: _HeroHeader(imageUrl: _dispImage),
               ),
               bottom: TabBar(
@@ -793,8 +1177,14 @@ END:VCALENDAR
                 labelColor: Colors.white,
                 unselectedLabelColor: Colors.white70,
                 tabs: const [
-                  Tab(icon: Icon(Icons.dashboard_outlined), text: 'Detay'),
-                  Tab(icon: Icon(Icons.groups_2_outlined), text: 'Katılımcılar'),
+                  Tab(
+                    icon: Icon(Icons.dashboard_outlined),
+                    text: 'Detay',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.groups_2_outlined),
+                    text: 'Katılımcılar',
+                  ),
                 ],
               ),
             ),
@@ -821,17 +1211,22 @@ END:VCALENDAR
                 canManage: canManage,
                 onSearch: (q) => setState(() => _search = q),
                 searchQuery: _search,
-                // Kapalı olsa bile canManage ise force:true gönderiyoruz
-                onJoin: (regId, studentId, {bool force = false}) => _joinLeave(true,
-                    userId: studentId,
-                    regId: regId,
-                    force: force || (canManage && !_canCheckin)),
+                onJoin: (regId, studentId, {bool force = false}) =>
+                    _joinLeave(
+                      true,
+                      userId: studentId,
+                      regId: regId,
+                      force: force || (canManage && !_canCheckin),
+                    ),
                 onLeave: (regId, studentId, {bool force = false}) =>
-                    _joinLeave(false,
-                        userId: studentId,
-                        regId: regId,
-                        force: force || (canManage && !_canCheckin)),
-                onKick: (regId, studentId) => _kickParticipant(regId, studentId),
+                    _joinLeave(
+                      false,
+                      userId: studentId,
+                      regId: regId,
+                      force: force || (canManage && !_canCheckin),
+                    ),
+                onKick: (regId, studentId) =>
+                    _kickParticipant(regId, studentId),
               ),
             ],
           ),
@@ -852,46 +1247,38 @@ END:VCALENDAR
         canCheckin: _canCheckin,
         onCsv: _copyCsv,
         onCopyPresent: _copyPresentList,
-        onAllJoin: () => _markAll(true), // force
-        onAllLeave: () => _markAll(false), // force
+        onAllJoin: () => _markAll(true),
+        onAllLeave: () => _markAll(false),
         onEdit: _openEditEventSheet,
         onDelete: _deleteEvent,
       ),
     );
   }
 
-  Future<void> _copyCsv() async {
-    final buf = StringBuffer()..writeln('name,attendance');
-    for (final p in _participants) {
-      final name = (p['name'] ?? '').toString().replaceAll(',', ' ');
-      final att = (p['attendance'] ?? false) ? 'joined' : 'left';
-      buf.writeln('$name,$att');
-    }
-    await Clipboard.setData(ClipboardData(text: buf.toString()));
-    _notify('CSV Kopyalandı', 'Katılımcı listesi panoya kopyalandı.',
-        icon: Icons.table_chart_outlined);
-  }
-
-  // -------- Admin/Teacher/Owner: Etkinliği Düzenle --------
   Future<void> _openEditEventSheet() async {
     if (!_canManage) {
-      _notify('Yetki Yok', 'Yalnızca öğretmen/sahip veya admin düzenleyebilir.',
-          error: true);
-      // ignore: invariant_booleans
+      _notify(
+        'Yetki Yok',
+        'Yalnızca öğretmen/sahip veya admin düzenleyebilir.',
+        error: true,
+      );
       return;
     }
 
     final titleCtrl = TextEditingController(text: _dispTitle);
-    final descCtrl =
-    TextEditingController(text: _dispDescription == '—' ? '' : _dispDescription);
+    final descCtrl = TextEditingController(
+      text: _dispDescription == '—' ? '' : _dispDescription,
+    );
     final locCtrl = TextEditingController(text: _dispLocation);
     final imgCtrl = TextEditingController(text: _dispImage ?? '');
     final pointCtrl = TextEditingController(text: _dispPoint.toString());
 
     DateTime date = _dispEventDate;
+
     TimeOfDay? startTod = _startsAt != null
         ? TimeOfDay(hour: _startsAt!.hour, minute: _startsAt!.minute)
         : null;
+
     TimeOfDay? endTod = _endsAt != null
         ? TimeOfDay(hour: _endsAt!.hour, minute: _endsAt!.minute)
         : null;
@@ -901,7 +1288,8 @@ END:VCALENDAR
       isScrollControlled: true,
       showDragHandle: true,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) => SafeArea(
           child: Padding(
@@ -918,9 +1306,13 @@ END:VCALENDAR
                 children: [
                   const ListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text('Etkinliği Düzenle',
-                        style: TextStyle(fontWeight: FontWeight.w700)),
-                    subtitle: Text('Başlık, açıklama, tarih/saat, konum, puan, görsel'),
+                    title: Text(
+                      'Etkinliği Düzenle',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(
+                      'Başlık, açıklama, tarih/saat, konum, puan, görsel',
+                    ),
                   ),
                   TextField(
                     controller: titleCtrl,
@@ -933,23 +1325,25 @@ END:VCALENDAR
                     maxLines: 4,
                   ),
                   const SizedBox(height: 8),
-                  Row(children: [
-                    Expanded(
-                      child: TextField(
-                        controller: locCtrl,
-                        decoration: const InputDecoration(labelText: 'Konum'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: locCtrl,
+                          decoration: const InputDecoration(labelText: 'Konum'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: imgCtrl,
-                        decoration: const InputDecoration(labelText: 'Görsel URL'),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: imgCtrl,
+                          decoration:
+                          const InputDecoration(labelText: 'Görsel URL'),
+                        ),
                       ),
-                    ),
-                  ]),
+                    ],
+                  ),
                   const SizedBox(height: 8),
-                  // Puan alanı (kontenjan kaldırıldı)
                   TextField(
                     controller: pointCtrl,
                     keyboardType: TextInputType.number,
@@ -961,7 +1355,9 @@ END:VCALENDAR
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.event),
-                          label: Text(DateFormat('d MMM y', 'tr').format(date)),
+                          label: Text(
+                            DateFormat('d MMM y', 'tr').format(date),
+                          ),
                           onPressed: () async {
                             final picked = await showDatePicker(
                               context: ctx,
@@ -970,7 +1366,10 @@ END:VCALENDAR
                               lastDate: DateTime(2100),
                               locale: const Locale('tr', 'TR'),
                             );
-                            if (picked != null) setSheet(() => date = picked);
+
+                            if (picked != null) {
+                              setSheet(() => date = picked);
+                            }
                           },
                         ),
                       ),
@@ -978,20 +1377,27 @@ END:VCALENDAR
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.schedule),
-                          label:
-                          Text(startTod == null ? 'Başlangıç' : startTod!.format(ctx)),
+                          label: Text(
+                            startTod == null
+                                ? 'Başlangıç'
+                                : startTod!.format(ctx),
+                          ),
                           onPressed: () async {
                             final picked = await showTimePicker(
                               context: ctx,
                               initialTime:
                               startTod ?? const TimeOfDay(hour: 9, minute: 0),
                               builder: (context, child) => MediaQuery(
-                                data: MediaQuery.of(context)
-                                    .copyWith(alwaysUse24HourFormat: true),
+                                data: MediaQuery.of(context).copyWith(
+                                  alwaysUse24HourFormat: true,
+                                ),
                                 child: child!,
                               ),
                             );
-                            if (picked != null) setSheet(() => startTod = picked);
+
+                            if (picked != null) {
+                              setSheet(() => startTod = picked);
+                            }
                           },
                         ),
                       ),
@@ -999,127 +1405,186 @@ END:VCALENDAR
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.schedule),
-                          label: Text(endTod == null ? 'Bitiş' : endTod!.format(ctx)),
+                          label: Text(
+                            endTod == null ? 'Bitiş' : endTod!.format(ctx),
+                          ),
                           onPressed: () async {
                             final picked = await showTimePicker(
                               context: ctx,
                               initialTime:
                               endTod ?? const TimeOfDay(hour: 10, minute: 0),
                               builder: (context, child) => MediaQuery(
-                                data: MediaQuery.of(context)
-                                    .copyWith(alwaysUse24HourFormat: true),
+                                data: MediaQuery.of(context).copyWith(
+                                  alwaysUse24HourFormat: true,
+                                ),
                                 child: child!,
                               ),
                             );
-                            if (picked != null) setSheet(() => endTod = picked);
+
+                            if (picked != null) {
+                              setSheet(() => endTod = picked);
+                            }
                           },
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Row(children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('İptal'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('İptal'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.icon(
-                        icon: const Icon(Icons.save_outlined),
-                        label: const Text('Kaydet'),
-                        onPressed: () async {
-                          try {
-                            final updates = <String, dynamic>{};
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton.icon(
+                          icon: const Icon(Icons.save_outlined),
+                          label: const Text('Kaydet'),
+                          onPressed: () async {
+                            try {
+                              final updates = <String, dynamic>{};
 
-                            if (titleCtrl.text.trim().isNotEmpty &&
-                                titleCtrl.text.trim() != _dispTitle) {
-                              updates['title'] = titleCtrl.text.trim();
-                            }
-                            if (descCtrl.text.trim() !=
-                                (_dispDescription == '—' ? '' : _dispDescription)) {
-                              updates['description'] = descCtrl.text.trim();
-                            }
-                            if (locCtrl.text.trim().isNotEmpty &&
-                                locCtrl.text.trim() != _dispLocation) {
-                              updates['location'] = locCtrl.text.trim();
-                            }
-                            if ((imgCtrl.text.trim()) != (_dispImage ?? '')) {
-                              updates['image_url'] = imgCtrl.text.trim();
-                            }
-                            final newPoint = int.tryParse(pointCtrl.text.trim());
-                            if (newPoint != null && newPoint != _dispPoint) {
-                              updates['point'] = newPoint;
-                            }
+                              if (titleCtrl.text.trim().isNotEmpty &&
+                                  titleCtrl.text.trim() != _dispTitle) {
+                                updates['title'] = titleCtrl.text.trim();
+                              }
 
-                            final eventDate =
-                            DateTime(date.year, date.month, date.day);
-                            if (!_isSameDay(eventDate, _dispEventDate)) {
-                              updates['event_date'] =
-                                  eventDate.toUtc().toIso8601String();
-                            }
-                            if (startTod != null) {
-                              final dt = DateTime(eventDate.year, eventDate.month,
-                                  eventDate.day, startTod!.hour, startTod!.minute);
-                              updates['starts_at'] = dt.toUtc().toIso8601String();
-                            }
-                            if (endTod != null) {
-                              final dt = DateTime(eventDate.year, eventDate.month,
-                                  eventDate.day, endTod!.hour, endTod!.minute);
-                              updates['ends_at'] = dt.toUtc().toIso8601String();
-                            }
+                              if (descCtrl.text.trim() !=
+                                  (_dispDescription == '—'
+                                      ? ''
+                                      : _dispDescription)) {
+                                updates['description'] = descCtrl.text.trim();
+                              }
 
-                            if (updates.isEmpty) {
-                              await _notify('Bilgi', 'Değişiklik yok.');
-                              return;
+                              if (locCtrl.text.trim().isNotEmpty &&
+                                  locCtrl.text.trim() != _dispLocation) {
+                                updates['location'] = locCtrl.text.trim();
+                              }
+
+                              if (imgCtrl.text.trim() != (_dispImage ?? '')) {
+                                updates['image_url'] = imgCtrl.text.trim();
+                              }
+
+                              final newPoint =
+                              int.tryParse(pointCtrl.text.trim());
+
+                              if (newPoint != null &&
+                                  newPoint != _dispPoint) {
+                                updates['point'] = newPoint;
+                              }
+
+                              final eventDate = DateTime(
+                                date.year,
+                                date.month,
+                                date.day,
+                              );
+
+                              if (!_isSameDay(eventDate, _dispEventDate)) {
+                                updates['event_date'] =
+                                    eventDate.toUtc().toIso8601String();
+                              }
+
+                              if (startTod != null) {
+                                final dt = DateTime(
+                                  eventDate.year,
+                                  eventDate.month,
+                                  eventDate.day,
+                                  startTod!.hour,
+                                  startTod!.minute,
+                                );
+
+                                updates['starts_at'] =
+                                    dt.toUtc().toIso8601String();
+                              }
+
+                              if (endTod != null) {
+                                final dt = DateTime(
+                                  eventDate.year,
+                                  eventDate.month,
+                                  eventDate.day,
+                                  endTod!.hour,
+                                  endTod!.minute,
+                                );
+
+                                updates['ends_at'] =
+                                    dt.toUtc().toIso8601String();
+                              }
+
+                              if (updates.isEmpty) {
+                                await _notify('Bilgi', 'Değişiklik yok.');
+                                return;
+                              }
+
+                              await supabase
+                                  .from('events')
+                                  .update(updates)
+                                  .eq('id', widget.event.id!);
+
+                              if (!mounted) return;
+
+                              setState(() {
+                                if (updates.containsKey('title')) {
+                                  _ovTitle = updates['title'] as String;
+                                }
+
+                                if (updates.containsKey('description')) {
+                                  _ovDescription =
+                                  updates['description'] as String;
+                                }
+
+                                if (updates.containsKey('location')) {
+                                  _ovLocation =
+                                  updates['location'] as String;
+                                }
+
+                                if (updates.containsKey('image_url')) {
+                                  _ovImageUrl =
+                                  updates['image_url'] as String;
+                                }
+
+                                if (updates.containsKey('point')) {
+                                  _ovPoint = updates['point'] as int;
+                                }
+
+                                if (updates.containsKey('event_date')) {
+                                  _ovEventDate =
+                                      DateTime.parse(updates['event_date'])
+                                          .toLocal();
+                                }
+
+                                if (updates.containsKey('starts_at')) {
+                                  _startsAt =
+                                      DateTime.parse(updates['starts_at'])
+                                          .toLocal();
+                                }
+
+                                if (updates.containsKey('ends_at')) {
+                                  _endsAt =
+                                      DateTime.parse(updates['ends_at'])
+                                          .toLocal();
+                                }
+                              });
+
+                              _calculateTimeLeft();
+
+                              await _rescheduleEventNotificationsIfPossible();
+
+                              if (mounted) {
+                                Navigator.pop(ctx);
+                              }
+
+                              await _toast('Etkinlik bilgileri kaydedildi');
+                            } catch (_) {
+                              await _toast('Kaydedilemedi', error: true);
                             }
-
-                            await supabase
-                                .from('events')
-                                .update(updates)
-                                .eq('id', widget.event.id!);
-
-                            setState(() {
-                              if (updates.containsKey('title')) {
-                                _ovTitle = updates['title'] as String;
-                              }
-                              if (updates.containsKey('description')) {
-                                _ovDescription = updates['description'] as String;
-                              }
-                              if (updates.containsKey('location')) {
-                                _ovLocation = updates['location'] as String;
-                              }
-                              if (updates.containsKey('image_url')) {
-                                _ovImageUrl = updates['image_url'] as String;
-                              }
-                              if (updates.containsKey('point')) {
-                                _ovPoint = updates['point'] as int;
-                              }
-                              if (updates.containsKey('event_date')) {
-                                _ovEventDate =
-                                    DateTime.parse(updates['event_date']).toLocal();
-                              }
-                              if (updates.containsKey('starts_at')) {
-                                _startsAt =
-                                    DateTime.parse(updates['starts_at']).toLocal();
-                              }
-                              if (updates.containsKey('ends_at')) {
-                                _endsAt = DateTime.parse(updates['ends_at']).toLocal();
-                              }
-                            });
-
-                            _calculateTimeLeft();
-                            if (mounted) Navigator.pop(ctx);
-                            _toast('Etkinlik bilgileri kaydedildi');
-                          } catch (e) {
-                            _toast('Kaydedilemedi', error: true);
-                          }
-                        },
+                          },
+                        ),
                       ),
-                    ),
-                  ]),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -1127,6 +1592,12 @@ END:VCALENDAR
         ),
       ),
     );
+
+    titleCtrl.dispose();
+    descCtrl.dispose();
+    locCtrl.dispose();
+    imgCtrl.dispose();
+    pointCtrl.dispose();
   }
 }
 
@@ -1134,6 +1605,7 @@ END:VCALENDAR
 
 class _HeroHeader extends StatelessWidget {
   const _HeroHeader({required this.imageUrl});
+
   final String? imageUrl;
 
   @override
@@ -1145,14 +1617,17 @@ class _HeroHeader extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         if (url == null || url.isEmpty)
-          Container(color: isDark ? const Color(0xFF0B1A33) : kPrimary)
+          Container(
+            color: isDark ? const Color(0xFF0B1A33) : kPrimary,
+          )
         else
           Image.network(
             url,
             fit: BoxFit.cover,
             cacheWidth: 1200,
-            errorBuilder: (_, __, ___) =>
-                Container(color: isDark ? const Color(0xFF0B1A33) : kPrimary),
+            errorBuilder: (_, __, ___) => Container(
+              color: isDark ? const Color(0xFF0B1A33) : kPrimary,
+            ),
             loadingBuilder: (c, child, p) =>
             p == null ? child : const Center(child: CircularProgressIndicator()),
           ),
@@ -1160,7 +1635,10 @@ class _HeroHeader extends StatelessWidget {
           tween: Tween(begin: 0, end: 1),
           duration: const Duration(milliseconds: 450),
           builder: (_, v, __) => BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 2 + v * 3, sigmaY: 2 + v * 3),
+            filter: ImageFilter.blur(
+              sigmaX: 2 + v * 3,
+              sigmaY: 2 + v * 3,
+            ),
             child: const SizedBox.expand(),
           ),
         ),
@@ -1180,8 +1658,6 @@ class _HeroHeader extends StatelessWidget {
 
 enum PillVariant { normal, muted, success, warn }
 
-/* ====================== NEW DETAIL LAYOUT ====================== */
-
 class SummarySectionPro extends StatelessWidget {
   const SummarySectionPro({
     super.key,
@@ -1198,8 +1674,12 @@ class SummarySectionPro extends StatelessWidget {
   });
 
   final DateTime date;
-  final String timeText, location, countdownText, description;
-  final int point, registered;
+  final String timeText;
+  final String location;
+  final String countdownText;
+  final String description;
+  final int point;
+  final int registered;
   final bool canCheckin;
   final String? ownerName;
   final bool isPast;
@@ -1207,20 +1687,27 @@ class SummarySectionPro extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(kSpace3, kSpace2, kSpace3, 96),
+      padding: const EdgeInsets.fromLTRB(
+        kSpace3,
+        kSpace2,
+        kSpace3,
+        96,
+      ),
       children: [
         Row(
           children: [
             DateBadgeWide(date: date),
-            const SizedBox(height: kSpace3),
+            const SizedBox(width: kSpace3),
             Expanded(child: TimePill(text: timeText)),
           ],
         ),
         const SizedBox(height: kSpace3),
-
         if (isPast)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 8,
+            ),
             margin: const EdgeInsets.only(bottom: 8),
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: .05),
@@ -1236,30 +1723,31 @@ class SummarySectionPro extends StatelessWidget {
               ],
             ),
           ),
-
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            InfoPill(icon: Icons.location_on, text: location),
-            const SizedBox(width: 8),
-            if ((ownerName ?? '').isNotEmpty)
-              InfoPill(icon: Icons.person, text: ownerName!),
-            if ((ownerName ?? '').isNotEmpty) const SizedBox(width: 8),
-            InfoPill(icon: Icons.star_border, text: '$point puan'),
-            const SizedBox(width: 8),
-            InfoPill(
-              icon: canCheckin ? Icons.how_to_reg : Icons.lock_clock,
-              text: canCheckin ? 'Yoklama Açık' : 'Yoklama Kapalı',
-              variant: canCheckin ? PillVariant.success : PillVariant.muted,
-            ),
-          ]),
+          child: Row(
+            children: [
+              InfoPill(icon: Icons.location_on, text: location),
+              const SizedBox(width: 8),
+              if ((ownerName ?? '').isNotEmpty)
+                InfoPill(icon: Icons.person, text: ownerName!),
+              if ((ownerName ?? '').isNotEmpty) const SizedBox(width: 8),
+              InfoPill(icon: Icons.star_border, text: '$point puan'),
+              const SizedBox(width: 8),
+              InfoPill(
+                icon: canCheckin ? Icons.how_to_reg : Icons.lock_clock,
+                text: canCheckin ? 'Yoklama Açık' : 'Yoklama Kapalı',
+                variant: canCheckin ? PillVariant.success : PillVariant.muted,
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: kSpace3),
-
-        // Basit istatistik kartı: Kayıtlı kişi sayısı + geri sayım
         Card(
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(r16),
+          ),
           color: Colors.white,
           child: Padding(
             padding: const EdgeInsets.all(kSpace3),
@@ -1282,8 +1770,13 @@ class SummarySectionPro extends StatelessWidget {
                       children: [
                         Text('Kayıtlı', style: _labelStyle),
                         const SizedBox(height: 4),
-                        Text('$registered',
-                            style: _valueStyle.copyWith(color: kPrimary, fontSize: 20)),
+                        Text(
+                          '$registered',
+                          style: _valueStyle.copyWith(
+                            color: kPrimary,
+                            fontSize: 20,
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -1291,12 +1784,18 @@ class SummarySectionPro extends StatelessWidget {
                 const SizedBox(height: kSpace2),
                 Row(
                   children: [
-                    const Icon(Icons.hourglass_bottom, size: 18, color: kPrimary),
+                    const Icon(
+                      Icons.hourglass_bottom,
+                      size: 18,
+                      color: kPrimary,
+                    ),
                     const SizedBox(width: 6),
                     Flexible(
-                      child: Text('Kalan: $countdownText',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      child: Text(
+                        'Kalan: $countdownText',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ],
                 ),
@@ -1305,20 +1804,28 @@ class SummarySectionPro extends StatelessWidget {
           ),
         ),
         const SizedBox(height: kSpace3),
-
         Card(
           elevation: 1,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(r16),
+          ),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(kSpace3, kSpace3, kSpace3, kSpace4),
+            padding: const EdgeInsets.fromLTRB(
+              kSpace3,
+              kSpace3,
+              kSpace3,
+              kSpace4,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  const Icon(Icons.notes_outlined, color: kPrimary),
-                  const SizedBox(width: kSpace2),
-                  Text('Açıklama', style: _titleStyle),
-                ]),
+                Row(
+                  children: [
+                    const Icon(Icons.notes_outlined, color: kPrimary),
+                    const SizedBox(width: kSpace2),
+                    Text('Açıklama', style: _titleStyle),
+                  ],
+                ),
                 const SizedBox(height: kSpace2),
                 Text(
                   description.trim().isEmpty ? '—' : description,
@@ -1334,7 +1841,11 @@ class SummarySectionPro extends StatelessWidget {
 }
 
 class TimePill extends StatelessWidget {
-  const TimePill({super.key, required this.text});
+  const TimePill({
+    super.key,
+    required this.text,
+  });
+
   final String text;
 
   @override
@@ -1348,27 +1859,38 @@ class TimePill extends StatelessWidget {
         border: Border.all(color: Colors.black12),
         boxShadow: [
           BoxShadow(
-              color: Colors.black12.withValues(alpha: .05),
-              blurRadius: 8,
-              offset: const Offset(0, 4))
+            color: Colors.black12.withValues(alpha: .05),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
         children: [
           const Icon(Icons.schedule, color: kPrimary),
           const SizedBox(width: 10),
-          Text(text,
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 16,
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-/* ====================== COMMON UI PARTS ====================== */
-
 class GlassCard extends StatelessWidget {
-  const GlassCard({super.key, required this.child});
+  const GlassCard({
+    super.key,
+    required this.child,
+  });
+
   final Widget child;
 
   @override
@@ -1379,7 +1901,9 @@ class GlassCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: .55),
           borderRadius: BorderRadius.circular(r16),
-          border: Border.all(color: Colors.white.withValues(alpha: .30)),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: .30),
+          ),
         ),
         padding: const EdgeInsets.all(kSpace3),
         child: child,
@@ -1389,7 +1913,11 @@ class GlassCard extends StatelessWidget {
 }
 
 class DateBadgeWide extends StatelessWidget {
-  const DateBadgeWide({super.key, required this.date});
+  const DateBadgeWide({
+    super.key,
+    required this.date,
+  });
+
   final DateTime date;
 
   @override
@@ -1399,7 +1927,10 @@ class DateBadgeWide extends StatelessWidget {
     final year = DateFormat('y', 'tr').format(date);
 
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 14 * kUiScale, vertical: 10 * kUiScale),
+      padding: EdgeInsets.symmetric(
+        horizontal: 14 * kUiScale,
+        vertical: 10 * kUiScale,
+      ),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(r16),
@@ -1412,25 +1943,52 @@ class DateBadgeWide extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text(day,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            day,
             style: TextStyle(
-                fontSize: 30 * kUiScale, fontWeight: FontWeight.w900, color: kPrimary, height: 1)),
-        const SizedBox(width: 10),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(mon,
-              style: TextStyle(
-                  letterSpacing: 1.2, fontWeight: FontWeight.w700, fontSize: 13 * kUiScale)),
-          Text(year, style: TextStyle(color: Colors.grey.shade700, fontSize: 12 * kUiScale)),
-        ]),
-      ]),
+              fontSize: 30 * kUiScale,
+              fontWeight: FontWeight.w900,
+              color: kPrimary,
+              height: 1,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                mon,
+                style: TextStyle(
+                  letterSpacing: 1.2,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13 * kUiScale,
+                ),
+              ),
+              Text(
+                year,
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 12 * kUiScale,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
 
 class InfoPill extends StatelessWidget {
-  const InfoPill(
-      {super.key, required this.icon, required this.text, this.variant = PillVariant.normal});
+  const InfoPill({
+    super.key,
+    required this.icon,
+    required this.text,
+    this.variant = PillVariant.normal,
+  });
 
   final IconData icon;
   final String text;
@@ -1439,6 +1997,7 @@ class InfoPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Color fg = kPrimary;
+
     switch (variant) {
       case PillVariant.success:
         fg = kOk;
@@ -1450,25 +2009,33 @@ class InfoPill extends StatelessWidget {
         fg = Colors.grey.shade700;
         break;
       case PillVariant.normal:
-      default:
         fg = kPrimary;
         break;
     }
+
     return Container(
       decoration: BoxDecoration(
         color: fg.withValues(alpha: .08),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: fg.withValues(alpha: .20)),
+        border: Border.all(
+          color: fg.withValues(alpha: .20),
+        ),
       ),
       padding: EdgeInsets.symmetric(
         horizontal: 12 * kUiScale,
         vertical: 7 * kUiScale,
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 18 * kUiScale, color: fg),
-        SizedBox(width: 6 * kUiScale),
-        Text(text, style: TextStyle(fontSize: 14 * kUiScale)),
-      ]),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18 * kUiScale, color: fg),
+          SizedBox(width: 6 * kUiScale),
+          Text(
+            text,
+            style: TextStyle(fontSize: 14 * kUiScale),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1492,35 +2059,50 @@ class StatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = valueColor ?? kInk;
+
     return SizedBox(
       height: 108,
       child: Card(
         elevation: 1,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r16)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(r16),
+        ),
         color: softBg ? c.withValues(alpha: .06) : null,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(children: [
-            Container(
-              padding: EdgeInsets.all(9 * kUiScale),
-              decoration:
-              BoxDecoration(color: c.withValues(alpha: .10), borderRadius: BorderRadius.circular(r12)),
-              child: Icon(icon, color: c, size: 20 * kUiScale),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: _labelStyle),
-                  const SizedBox(height: 6),
-                  Text(value,
-                      style: _valueStyle.copyWith(color: c, fontSize: 22 * kUiScale)),
-                ],
+          padding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 12,
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(9 * kUiScale),
+                decoration: BoxDecoration(
+                  color: c.withValues(alpha: .10),
+                  borderRadius: BorderRadius.circular(r12),
+                ),
+                child: Icon(icon, color: c, size: 20 * kUiScale),
               ),
-            ),
-          ]),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: _labelStyle),
+                    const SizedBox(height: 6),
+                    Text(
+                      value,
+                      style: _valueStyle.copyWith(
+                        color: c,
+                        fontSize: 22 * kUiScale,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1540,9 +2122,12 @@ class ManageSheet extends StatelessWidget {
     this.onCopyPresent,
   });
 
-  final bool isAdmin, canCheckin;
+  final bool isAdmin;
+  final bool canCheckin;
   final VoidCallback onCsv;
-  final VoidCallback? onAllJoin, onAllLeave, onCopyPresent;
+  final VoidCallback? onAllJoin;
+  final VoidCallback? onAllLeave;
+  final VoidCallback? onCopyPresent;
   final Future<void> Function()? onDelete;
   final Future<void> Function() onEdit;
 
@@ -1550,74 +2135,102 @@ class ManageSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(kSpace3, kSpace2, kSpace3, kSpace3),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const ListTile(
-            leading: Icon(Icons.tune, color: kPrimary),
-            title: Text('Yönetim'),
-            subtitle: Text('CSV, yoklama ve düzenleme'),
-          ),
-          Row(children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                  onPressed: onCsv,
-                  icon: const Icon(Icons.table_chart),
-                  label: const Text('CSV Kopyala')),
+        padding: const EdgeInsets.fromLTRB(
+          kSpace3,
+          kSpace2,
+          kSpace3,
+          kSpace3,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              leading: Icon(Icons.tune, color: kPrimary),
+              title: Text('Yönetim'),
+              subtitle: Text('CSV, yoklama ve düzenleme'),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: OutlinedButton.icon(
-                  onPressed: onCopyPresent,
-                  icon: const Icon(Icons.checklist_rtl),
-                  label: const Text('Katılanlar')),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onCsv,
+                    icon: const Icon(Icons.table_chart),
+                    label: const Text('CSV Kopyala'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onCopyPresent,
+                    icon: const Icon(Icons.checklist_rtl),
+                    label: const Text('Katılanlar'),
+                  ),
+                ),
+              ],
             ),
-          ]),
-          const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-                child: FilledButton.tonalIcon(
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonalIcon(
                     onPressed: onAllJoin,
                     icon: const Icon(Icons.task_alt),
-                    label: const Text('Hepsi Katıldı'))),
-            const SizedBox(width: 8),
-            Expanded(
-                child: FilledButton.tonalIcon(
+                    label: const Text('Hepsi Katıldı'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.tonalIcon(
                     onPressed: onAllLeave,
                     icon: const Icon(Icons.block),
-                    label: const Text('Hepsi Katılmadı'))),
-          ]),
-          const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-                child: FilledButton.icon(
+                    label: const Text('Hepsi Katılmadı'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
                     onPressed: onEdit,
                     icon: const Icon(Icons.edit),
-                    label: const Text('Etkinliği Düzenle'))),
-          ]),
-          const SizedBox(height: 12),
-          if (isAdmin)
-            Row(children: [
-              Expanded(
-                  child: FilledButton.icon(
-                    onPressed: onDelete,
-                    icon: const Icon(Icons.delete_forever_outlined),
-                    label: const Text('Etkinliği Sil'),
-                    style: FilledButton.styleFrom(
-                        backgroundColor: kWarn.withValues(alpha: .12),
-                        foregroundColor: kWarn),
-                  )),
-            ]),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              canCheckin
-                  ? 'Yoklama açık'
-                  : 'Not: Yoklama kapalı (yetkililer yine onay verebilir).',
-              style: TextStyle(color: canCheckin ? kOk : Colors.grey),
+                    label: const Text('Etkinliği Düzenle'),
+                  ),
+                ),
+              ],
             ),
-          ),
-        ]),
+            const SizedBox(height: 12),
+            if (isAdmin)
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: onDelete,
+                      icon: const Icon(Icons.delete_forever_outlined),
+                      label: const Text('Etkinliği Sil'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: kWarn.withValues(alpha: .12),
+                        foregroundColor: kWarn,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                canCheckin
+                    ? 'Yoklama açık'
+                    : 'Not: Yoklama kapalı (yetkililer yine onay verebilir).',
+                style: TextStyle(
+                  color: canCheckin ? kOk : Colors.grey,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1637,13 +2250,22 @@ class ParticipantsSection extends StatefulWidget {
   });
 
   final List<Map<String, dynamic>> participants;
-  final bool canCheckin, canManage;
+  final bool canCheckin;
+  final bool canManage;
   final ValueChanged<String> onSearch;
   final String searchQuery;
 
-  // force param’ını destekleyen callback imzaları
-  final Future<void> Function(int regId, int studentId, {bool force}) onJoin;
-  final Future<void> Function(int regId, int studentId, {bool force}) onLeave;
+  final Future<void> Function(
+      int regId,
+      int studentId, {
+      bool force,
+      }) onJoin;
+
+  final Future<void> Function(
+      int regId,
+      int studentId, {
+      bool force,
+      }) onLeave;
 
   final Future<void> Function(int regId, int studentId) onKick;
 
@@ -1663,12 +2285,40 @@ class _ParticipantsSectionState extends State<ParticipantsSection> {
     super.dispose();
   }
 
+  List<Map<String, dynamic>> _visible(
+      List<Map<String, dynamic>> list,
+      String q,
+      ) {
+    var l = List<Map<String, dynamic>>.from(list);
+
+    if (q.isNotEmpty) {
+      final qq = q.toLowerCase();
+
+      l = l
+          .where(
+            (p) => (p['name'] ?? '').toString().toLowerCase().contains(qq),
+      )
+          .toList();
+    }
+
+    l.sort((a, b) => (b['id'] as int).compareTo(a['id'] as int));
+
+    return l;
+  }
+
   @override
   Widget build(BuildContext context) {
     final base = _visible(widget.participants, widget.searchQuery);
+
     final filtered = base.where((p) {
-      if (_filter == _AttFilter.joined) return (p['attendance'] ?? false) == true;
-      if (_filter == _AttFilter.notJoined) return (p['attendance'] ?? false) == false;
+      if (_filter == _AttFilter.joined) {
+        return (p['attendance'] ?? false) == true;
+      }
+
+      if (_filter == _AttFilter.notJoined) {
+        return (p['attendance'] ?? false) == false;
+      }
+
       return true;
     }).toList();
 
@@ -1678,117 +2328,156 @@ class _ParticipantsSectionState extends State<ParticipantsSection> {
           color: Theme.of(context).colorScheme.surface,
           elevation: 1,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(kSpace3, 8, kSpace3, 8),
+            padding: const EdgeInsets.fromLTRB(
+              kSpace3,
+              8,
+              kSpace3,
+              8,
+            ),
             child: TextField(
               decoration: InputDecoration(
                 hintText: 'İsme göre ara…',
                 prefixIcon: const Icon(Icons.search),
                 isDense: true,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(r12)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(r12),
+                ),
               ),
               onChanged: (q) {
                 _debounce?.cancel();
-                _debounce = Timer(const Duration(milliseconds: 250), () => widget.onSearch(q));
+
+                _debounce = Timer(
+                  const Duration(milliseconds: 250),
+                      () => widget.onSearch(q),
+                );
               },
             ),
           ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-          child: Wrap(spacing: 8, children: [
-            ChoiceChip(
-              label: const Text('Hepsi'),
-              selected: _filter == _AttFilter.all,
-              onSelected: (_) => setState(() => _filter = _AttFilter.all),
-            ),
-            ChoiceChip(
-              label: const Text('Katılan'),
-              selected: _filter == _AttFilter.joined,
-              onSelected: (_) => setState(() => _filter = _AttFilter.joined),
-            ),
-            ChoiceChip(
-              label: const Text('Katılmayan'),
-              selected: _filter == _AttFilter.notJoined,
-              onSelected: (_) => setState(() => _filter = _AttFilter.notJoined),
-            ),
-          ]),
+          child: Wrap(
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('Hepsi'),
+                selected: _filter == _AttFilter.all,
+                onSelected: (_) => setState(() => _filter = _AttFilter.all),
+              ),
+              ChoiceChip(
+                label: const Text('Katılan'),
+                selected: _filter == _AttFilter.joined,
+                onSelected: (_) => setState(() => _filter = _AttFilter.joined),
+              ),
+              ChoiceChip(
+                label: const Text('Katılmayan'),
+                selected: _filter == _AttFilter.notJoined,
+                onSelected: (_) =>
+                    setState(() => _filter = _AttFilter.notJoined),
+              ),
+            ],
+          ),
         ),
         Expanded(
           child: filtered.isEmpty
               ? Center(
-              child: Text('Kriterlere uyan katılımcı yok.',
-                  style: TextStyle(color: Colors.grey.shade600)))
+            child: Text(
+              'Kriterlere uyan katılımcı yok.',
+              style: TextStyle(color: Colors.grey.shade600),
+            ),
+          )
               : ListView.separated(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             itemCount: filtered.length,
             separatorBuilder: (_, __) => const SizedBox(height: 6),
             itemBuilder: (_, i) {
               final p = filtered[i];
+
               final name = (p['name'] ?? 'İsimsiz').toString();
               final attended = p['attendance'] ?? false;
               final regId = p['id'] as int;
               final sid = p['studentId'] as int;
 
               final showManageButtons = widget.canManage;
-              final enableButtons = widget.canManage; // kapalı olsa da yetkiliyse aktif
+              final enableButtons = widget.canManage;
 
               return Card(
                 elevation: .5,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r14)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(r14),
+                ),
                 child: ListTile(
                   dense: true,
-                  contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   leading: CircleAvatar(
                     backgroundColor: kPrimary.withValues(alpha: .10),
                     child: Text(
-                        name.isNotEmpty ? name[0].toUpperCase() : '?',
-                        style: const TextStyle(color: kPrimary)),
+                      name.isNotEmpty ? name[0].toUpperCase() : '?',
+                      style: const TextStyle(color: kPrimary),
+                    ),
                   ),
-                  title:
-                  Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  title: Text(
+                    name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   trailing: SizedBox(
                     width: showManageButtons ? 200 : 130,
-                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                      if (showManageButtons)
-                        IconButton.filledTonal(
-                          tooltip: 'Katıldı',
-                          icon: const Icon(Icons.check),
-                          onPressed: enableButtons && !attended
-                              ? () => widget.onJoin(
-                            regId,
-                            sid,
-                            force: !widget.canCheckin && widget.canManage,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        if (showManageButtons)
+                          IconButton.filledTonal(
+                            tooltip: 'Katıldı',
+                            icon: const Icon(Icons.check),
+                            onPressed: enableButtons && !attended
+                                ? () => widget.onJoin(
+                              regId,
+                              sid,
+                              force: !widget.canCheckin &&
+                                  widget.canManage,
+                            )
+                                : null,
+                            style: IconButton.styleFrom(
+                              foregroundColor: kOk,
+                            ),
                           )
-                              : null,
-                          style: IconButton.styleFrom(foregroundColor: kOk),
-                        )
-                      else
-                        Icon(attended ? Icons.check_circle : Icons.cancel,
-                            color: attended ? kOk : kWarn),
-                      const SizedBox(width: 6),
-                      if (showManageButtons)
-                        IconButton.filledTonal(
-                          tooltip: 'Katılmadı',
-                          icon: const Icon(Icons.close),
-                          onPressed: enableButtons && attended
-                              ? () => widget.onLeave(
-                            regId,
-                            sid,
-                            force: !widget.canCheckin && widget.canManage,
-                          )
-                              : null,
-                          style: IconButton.styleFrom(foregroundColor: kWarn),
-                        ),
-                      if (showManageButtons) ...[
+                        else
+                          Icon(
+                            attended ? Icons.check_circle : Icons.cancel,
+                            color: attended ? kOk : kWarn,
+                          ),
                         const SizedBox(width: 6),
-                        IconButton.filledTonal(
-                          tooltip: 'Katılımcıyı çıkar',
-                          icon: const Icon(Icons.person_remove_alt_1),
-                          onPressed: () => widget.onKick(regId, sid),
-                        ),
-                      ]
-                    ]),
+                        if (showManageButtons)
+                          IconButton.filledTonal(
+                            tooltip: 'Katılmadı',
+                            icon: const Icon(Icons.close),
+                            onPressed: enableButtons && attended
+                                ? () => widget.onLeave(
+                              regId,
+                              sid,
+                              force: !widget.canCheckin &&
+                                  widget.canManage,
+                            )
+                                : null,
+                            style: IconButton.styleFrom(
+                              foregroundColor: kWarn,
+                            ),
+                          ),
+                        if (showManageButtons) ...[
+                          const SizedBox(width: 6),
+                          IconButton.filledTonal(
+                            tooltip: 'Katılımcıyı çıkar',
+                            icon: const Icon(
+                              Icons.person_remove_alt_1,
+                            ),
+                            onPressed: () => widget.onKick(regId, sid),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -1797,49 +2486,57 @@ class _ParticipantsSectionState extends State<ParticipantsSection> {
         ),
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.check_circle,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.check_circle,
                 size: 18,
-                color: widget.canManage ? kOk : (widget.canCheckin ? kOk : Colors.grey)),
-            const SizedBox(width: 6),
-            Text('Katıldı',
-                style: TextStyle(
-                    fontSize: 12,
-                    color: widget.canManage
-                        ? null
-                        : (widget.canCheckin ? null : Colors.grey))),
-            const SizedBox(width: 12),
-            Icon(Icons.cancel,
-                size: 18,
-                color:
-                widget.canManage ? kWarn : (widget.canCheckin ? kWarn : Colors.grey)),
-            const SizedBox(width: 6),
-            Text('Katılmadı',
-                style: TextStyle(
-                    fontSize: 12,
-                    color: widget.canManage
-                        ? null
-                        : (widget.canCheckin ? null : Colors.grey))),
-            if (!widget.canCheckin && !widget.canManage)
-              const Padding(
-                padding: EdgeInsets.only(left: 6),
-                child: Text('(Yoklama kapalı)',
-                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+                color: widget.canManage
+                    ? kOk
+                    : (widget.canCheckin ? kOk : Colors.grey),
               ),
-          ]),
+              const SizedBox(width: 6),
+              Text(
+                'Katıldı',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: widget.canManage
+                      ? null
+                      : (widget.canCheckin ? null : Colors.grey),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Icon(
+                Icons.cancel,
+                size: 18,
+                color: widget.canManage
+                    ? kWarn
+                    : (widget.canCheckin ? kWarn : Colors.grey),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Katılmadı',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: widget.canManage
+                      ? null
+                      : (widget.canCheckin ? null : Colors.grey),
+                ),
+              ),
+              if (!widget.canCheckin && !widget.canManage)
+                const Padding(
+                  padding: EdgeInsets.only(left: 6),
+                  child: Text(
+                    '(Yoklama kapalı)',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
     );
-  }
-
-  List<Map<String, dynamic>> _visible(List<Map<String, dynamic>> list, String q) {
-    var l = List<Map<String, dynamic>>.from(list);
-    if (q.isNotEmpty) {
-      final qq = q.toLowerCase();
-      l = l.where((p) => (p['name'] ?? '').toString().toLowerCase().contains(qq)).toList();
-    }
-    l.sort((a, b) => (b['id'] as int).compareTo(a['id'] as int));
-    return l;
   }
 }
 
@@ -1857,9 +2554,16 @@ class StudentActionsFab extends StatelessWidget {
     required this.onLeave,
   });
 
-  final bool isStudent, hasApplied, canCheckin, isEventPassed;
+  final bool isStudent;
+  final bool hasApplied;
+  final bool canCheckin;
+  final bool isEventPassed;
   final Duration timeLeft;
-  final VoidCallback onApply, onCancel, onJoin, onLeave;
+
+  final VoidCallback onApply;
+  final VoidCallback onCancel;
+  final VoidCallback onJoin;
+  final VoidCallback onLeave;
 
   @override
   Widget build(BuildContext context) {
@@ -1871,9 +2575,10 @@ class StudentActionsFab extends StatelessWidget {
           borderRadius: BorderRadius.circular(40),
           boxShadow: [
             BoxShadow(
-                color: kAccent.withValues(alpha: .45),
-                blurRadius: 22,
-                offset: const Offset(0, 10))
+              color: kAccent.withValues(alpha: .45),
+              blurRadius: 22,
+              offset: const Offset(0, 10),
+            ),
           ],
         ),
         child: FloatingActionButton.extended(
@@ -1955,16 +2660,26 @@ class _SkeletonDetail extends StatelessWidget {
 }
 
 class _SkelBox extends StatelessWidget {
-  const _SkelBox({this.h = 16, this.w = double.infinity, this.r = 12});
-  final double h, w, r;
+  const _SkelBox({
+    this.h = 16,
+    this.w = double.infinity,
+    this.r = 12,
+  });
+
+  final double h;
+  final double w;
+  final double r;
+
   @override
-  Widget build(BuildContext c) => Container(
-    height: h,
-    width: w,
-    margin: const EdgeInsets.symmetric(vertical: 6),
-    decoration: BoxDecoration(
-      color: Colors.black12.withValues(alpha: .06),
-      borderRadius: BorderRadius.circular(r),
-    ),
-  );
+  Widget build(BuildContext c) {
+    return Container(
+      height: h,
+      width: w,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black12.withValues(alpha: .06),
+        borderRadius: BorderRadius.circular(r),
+      ),
+    );
+  }
 }

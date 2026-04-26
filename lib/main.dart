@@ -1,119 +1,165 @@
 // lib/main.dart
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'providers/theme_provider.dart';
-import 'pages/login_page.dart';
-import 'pages/navigation_page.dart';
-import 'services/notification_service.dart';
+// Uygulama içi sayfalar
+import 'core/services/notification_service.dart';
+import 'features/auth/pages/login_page.dart';
+import 'navigation/pages/navigation_page.dart';
 
-// --dart-define gelirse onu kullanır; gelmezse defaults çalışır.
-const _kUrl = String.fromEnvironment(
+/// Supabase URL ve KEY
+/// Eğer build sırasında --dart-define ile verilirse onlar kullanılır.
+/// Verilmezse default değerler devreye girer.
+const String kSupabaseUrl = String.fromEnvironment(
   'SUPABASE_URL',
   defaultValue: 'https://tlwqekucboufnjvzmydb.supabase.co',
 );
-const _kAnon = String.fromEnvironment(
+
+const String kSupabaseAnonKey = String.fromEnvironment(
   'SUPABASE_ANON_KEY',
   defaultValue:
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsd3Fla3VjYm91Zm5qdnpteWRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTAxNTQ4NDEsImV4cCI6MjA2NTczMDg0MX0.UJ_9Rn5gCpDU7GdesVRMgBl5tkLw9k2l28j84Ij_prk',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsd3Fla3VjYm91Zm5qdnpteWRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTAxNTQ4NDEsImV4cCI6MjA2NTczMDg0MX0.UJ_9Rn5gCpDU7GdesVRMgBl5tkLw9k2l28j84Ij_prk',  // <-- kendi key'in
 );
 
 Future<void> main() async {
+  // Flutter engine başlatılır (async işlemler için gerekli)
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService().init();
 
+  /// Supabase uygulama başında initialize edilir
   await Supabase.initialize(
-    url: _kUrl.trim(),
-    anonKey: _kAnon.trim(),
-    debug: true,
+    url: kSupabaseUrl.trim(),
+    anonKey: kSupabaseAnonKey.trim(),
+
+    /// Debug sadece development ortamında açık olur
+    debug: !const bool.fromEnvironment('dart.vm.product'),
   );
 
-  // Hızlı teşhis: hangi URL ile açtık
-  debugPrint('Supabase URL => ${Uri.tryParse(_kUrl)?.host}');
-
+  /// Uygulama başlatılır
   runApp(const MyApp());
+
+  /// Notification sistemi UI çizildikten sonra başlatılır
+  /// (Bu sayede açılışta kasma azalır)
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    NotificationService().init();
+  });
 }
 
+/// Ana uygulama widget'ı
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [ChangeNotifierProvider(create: (_) => ThemeProvider())],
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        supportedLocales: const [Locale('tr'), Locale('en')],
-        locale: const Locale('tr'),
+    return MaterialApp(
+      /// Debug banner kapalı
+      debugShowCheckedModeBanner: false,
 
-        // --- KARANLIK MODU GEÇİCİ OLARAK KAPAT ---
-        // Uygulamanın sistem ayarından bağımsız olarak her zaman AÇIK (light) temada açılması için:
-        themeMode: ThemeMode.light,
-        theme: ThemeData.light(),
-        // darkTheme: ThemeData.dark(), // (İSTENİRSE) Şimdilik tamamen devre dışı bıraktık.
-        // -----------------------------------------
+      /// Çoklu dil desteği
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
 
-        home: const _AuthGate(),
-      ),
+      /// Desteklenen diller
+      supportedLocales: const [
+        Locale('tr'),
+        Locale('en'),
+      ],
+
+      /// Varsayılan dil
+      locale: const Locale('tr'),
+
+      /// Tema (şu an sabit açık tema)
+      themeMode: ThemeMode.light,
+      theme: ThemeData.light(),
+
+      /// İlk açılış yönlendirme
+      home: const AuthGate(),
     );
   }
 }
 
-class _AuthGate extends StatefulWidget {
-  const _AuthGate();
+/// Kullanıcının giriş yapıp yapmadığını kontrol eder
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+
   @override
-  State<_AuthGate> createState() => _AuthGateState();
+  State<AuthGate> createState() => _AuthGateState();
 }
 
-class _AuthGateState extends State<_AuthGate> {
-  Future<bool> _isLoggedIn() async {
-    final p = await SharedPreferences.getInstance();
-    final hasId = p.getInt('user_id');
-    final flag = p.getBool('is_logged_in') ?? false;
-    return hasId != null && flag;
+class _AuthGateState extends State<AuthGate> {
+  /// Login kontrolü sadece bir kez çalışır
+  late final Future<bool> _loginCheckFuture;
+
+  @override
+  void initState() {
+    super.initState();
+
+    /// SharedPreferences üzerinden login kontrolü başlatılır
+    _loginCheckFuture = _checkLoginStatus();
+  }
+
+  /// Kullanıcının login durumu kontrol edilir
+  Future<bool> _checkLoginStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    /// Kullanıcı ID
+    final userId = prefs.getInt('user_id');
+
+    /// Login flag
+    final isLoggedIn = prefs.getBool('is_logged_in') ?? false;
+
+    /// İkisi de varsa kullanıcı giriş yapmış kabul edilir
+    return userId != null && isLoggedIn;
   }
 
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<bool>(
-      future: _isLoggedIn(),
-      builder: (ctx, snap) {
-        if (!snap.hasData) {
-          return const Scaffold(
-              body: Center(child: CircularProgressIndicator()));
+      future: _loginCheckFuture,
+
+      builder: (context, snapshot) {
+        /// Veri henüz gelmediyse loading göster
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const _LoadingScreen();
         }
-        return snap.data! ? const RoleRouter() : const LoginPage();
+
+        /// Hata varsa kullanıcıya göster
+        if (snapshot.hasError) {
+          return const Scaffold(
+            body: Center(
+              child: Text('Başlangıç kontrolü sırasında bir hata oluştu.'),
+            ),
+          );
+        }
+
+        /// Login durumu
+        final isLoggedIn = snapshot.data ?? false;
+
+        /// Giriş yapılmışsa ana sayfa, değilse login sayfası
+        return isLoggedIn
+            ? const NavigationPage()
+            : const LoginPage();
       },
     );
   }
 }
 
-class RoleRouter extends StatelessWidget {
-  const RoleRouter({super.key});
-
-  Future<String> _loadRole() async {
-    final p = await SharedPreferences.getInstance();
-    return (p.getString('role') ?? 'student').toLowerCase();
-  }
+/// Basit loading ekranı
+class _LoadingScreen extends StatelessWidget {
+  const _LoadingScreen();
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<String>(
-      future: _loadRole(),
-      builder: (_, snap) {
-        if (!snap.hasData) {
-          return const Scaffold(
-              body: Center(child: CircularProgressIndicator()));
-        }
-        return const NavigationPage();
-      },
+    return const Scaffold(
+      body: Center(
+        /// Dairesel yüklenme animasyonu
+        child: CircularProgressIndicator(),
+      ),
     );
   }
 }

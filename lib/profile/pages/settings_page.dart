@@ -1,4 +1,5 @@
 // lib/pages/settings_page.dart
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,20 +7,20 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'login_page.dart';
+import 'package:msret/features/auth/pages/login_page.dart';
 
 /// ----- Tema -----
-const _kPrimary     = Color(0xFF123A8A);
+const _kPrimary = Color(0xFF123A8A);
 const _kPrimaryDark = Color(0xFF0A2C6A);
 const _kPrimaryTint = Color(0xFFE6F3FF);
-const _kSurface     = Colors.white;
+const _kSurface = Colors.white;
 
-/// Görünür sürüm (sabit)
-const _kAppVersionDisplay = 'v2.1.0';
+/// Görünür sürüm
+const _kAppVersionDisplay = 'V2.2';
 
-/// Sosyal medya linkleri
-final Uri _instagramUri = Uri.parse('https://www.instagram.com/hashus0420/');
-final Uri _linkedinUri  = Uri.parse('https://www.linkedin.com/in/hasanhüseyingenç');
+/// Resmi bağlantılar
+final Uri _schoolWebsiteUri = Uri.parse('https://selcukluanadoluihl.meb.k12.tr/');
+final Uri _instagramUri = Uri.parse('https://www.instagram.com/msr_anadoluihl/');
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -29,7 +30,6 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  // Çıkışta temizlenecek anahtarlar
   static const _userKeys = <String>[
     'auth_token',
     'user_id',
@@ -42,23 +42,24 @@ class _SettingsPageState extends State<SettingsPage> {
     'class',
     'full_name',
     'is_logged_in',
+    'identity',
+    'gender',
   ];
 
   late final Future<({String version, String appName})> _metaFut = _loadMeta();
   late final Future<({String? name, String? email})> _profFut = _loadProfile();
 
-  // ===== Bildirim tercihleri state =====
   static const _kPrefNotifEnabled = 'notif_enabled';
   static const _kPrefQuietEnabled = 'quiet_enabled';
-  static const _kPrefQuietFrom    = 'quiet_from';
-  static const _kPrefQuietTo      = 'quiet_to';
+  static const _kPrefQuietFrom = 'quiet_from';
+  static const _kPrefQuietTo = 'quiet_to';
   static const _kPrefDailySummary = 'daily_summary_enabled';
-  static const _kPrefDailyTime    = 'daily_summary_time';
+  static const _kPrefDailyTime = 'daily_summary_time';
 
   bool _notifEnabled = true;
   bool _quietEnabled = false;
   TimeOfDay _quietFrom = const TimeOfDay(hour: 22, minute: 0);
-  TimeOfDay _quietTo   = const TimeOfDay(hour: 7, minute: 0);
+  TimeOfDay _quietTo = const TimeOfDay(hour: 7, minute: 0);
 
   bool _dailySummary = false;
   TimeOfDay _dailyTime = const TimeOfDay(hour: 8, minute: 0);
@@ -71,7 +72,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<({String version, String appName})> _loadMeta() async {
     final info = await PackageInfo.fromPlatform();
-    // final shown = '$_kAppVersionDisplay (${info.version}+${info.buildNumber})';
     return (version: _kAppVersionDisplay, appName: info.appName);
   }
 
@@ -85,63 +85,102 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _loadNotifPrefs() async {
     final p = await SharedPreferences.getInstance();
+
+    if (!mounted) return;
+
     setState(() {
       _notifEnabled = p.getBool(_kPrefNotifEnabled) ?? true;
       _quietEnabled = p.getBool(_kPrefQuietEnabled) ?? false;
       _dailySummary = p.getBool(_kPrefDailySummary) ?? false;
-      _quietFrom = _parseTime(p.getString(_kPrefQuietFrom)) ?? const TimeOfDay(hour: 22, minute: 0);
-      _quietTo   = _parseTime(p.getString(_kPrefQuietTo))   ?? const TimeOfDay(hour: 7,  minute: 0);
-      _dailyTime = _parseTime(p.getString(_kPrefDailyTime)) ?? const TimeOfDay(hour: 8,  minute: 0);
+
+      _quietFrom =
+          _parseTime(p.getString(_kPrefQuietFrom)) ??
+              const TimeOfDay(hour: 22, minute: 0);
+
+      _quietTo =
+          _parseTime(p.getString(_kPrefQuietTo)) ??
+              const TimeOfDay(hour: 7, minute: 0);
+
+      _dailyTime =
+          _parseTime(p.getString(_kPrefDailyTime)) ??
+              const TimeOfDay(hour: 8, minute: 0);
     });
   }
 
   TimeOfDay? _parseTime(String? s) {
     if (s == null) return null;
+
     final parts = s.split(':');
     if (parts.length != 2) return null;
+
     final h = int.tryParse(parts[0]);
     final m = int.tryParse(parts[1]);
+
     if (h == null || m == null) return null;
+
     return TimeOfDay(hour: h, minute: m);
   }
 
   String _fmtTime(TimeOfDay t) => t.format(context);
 
-  Future<void> _savePrefs(void Function(SharedPreferences p) write) async {
-    final p = await SharedPreferences.getInstance();
-    write(p);
+  String _timeToString(TimeOfDay t) {
+    final h = t.hour.toString().padLeft(2, '0');
+    final m = t.minute.toString().padLeft(2, '0');
+    return '$h:$m';
   }
 
   Future<void> _pickQuietRange() async {
-    final start = await showTimePicker(context: context, initialTime: _quietFrom);
+    final start = await showTimePicker(
+      context: context,
+      initialTime: _quietFrom,
+    );
+
     if (start == null) return;
-    final end = await showTimePicker(context: context, initialTime: _quietTo);
+
+    final end = await showTimePicker(
+      context: context,
+      initialTime: _quietTo,
+    );
+
     if (end == null) return;
-    setState(() { _quietFrom = start; _quietTo = end; });
-    await _savePrefs((p){
-      p.setString(_kPrefQuietFrom, '${_quietFrom.hour.toString().padLeft(2,'0')}:${_quietFrom.minute.toString().padLeft(2,'0')}');
-      p.setString(_kPrefQuietTo,   '${_quietTo.hour.toString().padLeft(2,'0')}:${_quietTo.minute.toString().padLeft(2,'0')}');
+
+    final p = await SharedPreferences.getInstance();
+
+    setState(() {
+      _quietFrom = start;
+      _quietTo = end;
     });
+
+    await p.setString(_kPrefQuietFrom, _timeToString(start));
+    await p.setString(_kPrefQuietTo, _timeToString(end));
+
     HapticFeedback.selectionClick();
   }
 
   Future<void> _pickDailyTime() async {
-    final t = await showTimePicker(context: context, initialTime: _dailyTime);
+    final t = await showTimePicker(
+      context: context,
+      initialTime: _dailyTime,
+    );
+
     if (t == null) return;
+
+    final p = await SharedPreferences.getInstance();
+
     setState(() => _dailyTime = t);
-    await _savePrefs((p){
-      p.setString(_kPrefDailyTime, '${_dailyTime.hour.toString().padLeft(2,'0')}:${_dailyTime.minute.toString().padLeft(2,'0')}');
-    });
+
+    await p.setString(_kPrefDailyTime, _timeToString(t));
+
     HapticFeedback.selectionClick();
   }
 
-  // NavigatorState ile çalış: context'i async aralıklardan sonra kullanma
   Future<void> _performLogout(NavigatorState navigator) async {
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (_) {}
 
     final prefs = await SharedPreferences.getInstance();
+
     for (final k in _userKeys) {
       await prefs.remove(k);
     }
@@ -149,6 +188,7 @@ class _SettingsPageState extends State<SettingsPage> {
     HapticFeedback.selectionClick();
 
     if (!navigator.mounted) return;
+
     navigator.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginPage()),
           (_) => false,
@@ -164,8 +204,14 @@ class _SettingsPageState extends State<SettingsPage> {
         title: const Text('Çıkış Yap'),
         content: const Text('Bu hesaptan çıkmak istediğine emin misin?'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('İptal')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Çıkış Yap')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('İptal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Çıkış Yap'),
+          ),
         ],
       ),
     );
@@ -175,80 +221,115 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  /// Dış link aç
   Future<void> _openUrl(BuildContext context, Uri uri) async {
     final messenger = ScaffoldMessenger.of(context);
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    final ok = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+
     if (!ok) {
-      messenger.showSnackBar(const SnackBar(content: Text('Bağlantı açılamadı.')));
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Bağlantı açılamadı.')),
+      );
     }
   }
 
-  /// Geri bildirim – konu dolu, gövde boş
   Future<void> _sendFeedback(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
+
     try {
       final uri = Uri(
         scheme: 'mailto',
-        path: 'hashus0420@gmail.com',
-        queryParameters: {'subject': 'Geri Bildirim'},
+        path: 'selcukluanadoluihl42@meb.k12.tr',
+        queryParameters: {
+          'subject': 'MSR Etkinlik Uygulaması Geri Bildirim',
+        },
       );
-      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!ok) throw Exception('E-posta istemcisi açılamadı.');
+
+      final ok = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!ok) {
+        throw Exception('E-posta istemcisi açılamadı.');
+      }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Geri bildirim açılamadı: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Geri bildirim açılamadı: $e')),
+      );
     }
   }
 
-  /// PostgREST hatasını okunur hale çevir
   String _prettyPostgrestError(Object error) {
     if (error is PostgrestException) {
       String? s(Object? v) => v?.toString();
+
       final parts = <String?>[
         s(error.code),
         s(error.message),
         s(error.details),
-        s(error.hint)
+        s(error.hint),
       ]
-          .where((e) => e != null && e!.trim().isNotEmpty)
+          .where((e) => e != null && e.trim().isNotEmpty)
           .map((e) => e!.trim().toUpperCase())
           .toList();
+
       final raw = parts.join(' | ');
+
       if (raw.contains('BAD_CREDENTIALS')) return 'Mevcut şifre yanlış.';
-      if (raw.contains('USER_NOT_FOUND'))  return 'Kullanıcı bulunamadı.';
-      if (raw.contains('NO_PASSWORD_SET')) return 'Bu kullanıcı için şifre tanımlı değil.';
-      if (raw.contains('PASSWORD_CHANGE_FAILED')) return 'Şifre değiştirilemedi.';
-      if (raw.contains('PGRST203') || raw.contains('COULD NOT CHOOSE THE BEST CANDIDATE FUNCTION')) {
+      if (raw.contains('USER_NOT_FOUND')) return 'Kullanıcı bulunamadı.';
+      if (raw.contains('NO_PASSWORD_SET')) {
+        return 'Bu kullanıcı için şifre tanımlı değil.';
+      }
+      if (raw.contains('PASSWORD_CHANGE_FAILED')) {
+        return 'Şifre değiştirilemedi.';
+      }
+      if (raw.contains('PGRST203') ||
+          raw.contains('COULD NOT CHOOSE THE BEST CANDIDATE FUNCTION')) {
         return 'Sunucuda aynı isimli birden fazla fonksiyon var.';
       }
-      if (raw.contains('PERMISSION') || raw.contains('DENIED') || raw.contains('EXECUTE')) {
+      if (raw.contains('PERMISSION') ||
+          raw.contains('DENIED') ||
+          raw.contains('EXECUTE')) {
         return 'Yetki hatası: EXECUTE izni gerekli.';
       }
-      if (raw.contains('INVALID_GRANT')) return 'Oturum geçersiz. Yeniden giriş yapın.';
-      if (raw.contains('JWT')) return 'Oturum süresi dolmuş olabilir.';
+      if (raw.contains('INVALID_GRANT')) {
+        return 'Oturum geçersiz. Yeniden giriş yapın.';
+      }
+      if (raw.contains('JWT')) {
+        return 'Oturum süresi dolmuş olabilir.';
+      }
+
       return raw.isNotEmpty ? raw : 'İşlem başarısız';
     }
+
     return error.toString().isNotEmpty ? error.toString() : 'İşlem başarısız';
   }
 
-  /// Kimlik çöz
   Future<String?> _resolveIdentity() async {
     final sb = Supabase.instance.client;
     final prefs = await SharedPreferences.getInstance();
+
     final email = prefs.getString('email');
     if (email != null && email.isNotEmpty) return email;
+
     final username = prefs.getString('username');
     if (username != null && username.isNotEmpty) return username;
+
     final authEmail = sb.auth.currentUser?.email;
     if (authEmail != null && authEmail.isNotEmpty) return authEmail;
+
     return null;
   }
 
-  /// --- POPUP: Şifre Değiştir (RPC ile) ---
   Future<void> _changePasswordSheet(BuildContext context) async {
     final currentCtrl = TextEditingController();
     final newCtrl = TextEditingController();
     final confirmCtrl = TextEditingController();
+
     final formKey = GlobalKey<FormState>();
     final sb = Supabase.instance.client;
 
@@ -271,16 +352,48 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         builder: (sheetCtx) {
           bool isLoading = false;
-          bool obscure1 = true, obscure2 = true, obscure3 = true;
+          bool obscure1 = true;
+          bool obscure2 = true;
+          bool obscure3 = true;
 
           String? validateNew(String? v) {
             final val = (v ?? '').trim();
+
             if (val.isEmpty) return 'Zorunlu';
             if (val.length < 8) return 'En az 8 karakter olmalı';
+
             final hasLetter = RegExp(r'[A-Za-z]').hasMatch(val);
-            final hasDigit  = RegExp(r'\d').hasMatch(val);
-            if (!hasLetter || !hasDigit) return 'Harf ve rakam içermeli';
+            final hasDigit = RegExp(r'\d').hasMatch(val);
+
+            if (!hasLetter || !hasDigit) {
+              return 'Harf ve rakam içermeli';
+            }
+
             return null;
+          }
+
+          String strengthLabel(String v) {
+            int score = 0;
+
+            if (v.length >= 8) score++;
+            if (RegExp(r'[A-Z]').hasMatch(v)) score++;
+            if (RegExp(r'[a-z]').hasMatch(v)) score++;
+            if (RegExp(r'\d').hasMatch(v)) score++;
+            if (RegExp(r'[^\w\s]').hasMatch(v)) score++;
+
+            switch (score) {
+              case 0:
+              case 1:
+                return 'Çok zayıf';
+              case 2:
+                return 'Zayıf';
+              case 3:
+                return 'Orta';
+              case 4:
+                return 'İyi';
+              default:
+                return 'Güçlü';
+            }
           }
 
           Future<void> submit(StateSetter setState) async {
@@ -290,7 +403,7 @@ class _SettingsPageState extends State<SettingsPage> {
             final rootMessenger = ScaffoldMessenger.of(context);
 
             final current = currentCtrl.text.trim();
-            final next    = newCtrl.text.trim();
+            final next = newCtrl.text.trim();
             final confirm = confirmCtrl.text.trim();
 
             final form = formKey.currentState;
@@ -307,6 +420,7 @@ class _SettingsPageState extends State<SettingsPage> {
               );
               return;
             }
+
             if (current == next) {
               await showDialog(
                 context: sheetCtx,
@@ -317,6 +431,7 @@ class _SettingsPageState extends State<SettingsPage> {
               );
               return;
             }
+
             if (next != confirm) {
               await showDialog(
                 context: sheetCtx,
@@ -331,11 +446,14 @@ class _SettingsPageState extends State<SettingsPage> {
             setState(() => isLoading = true);
 
             try {
-              final res = await sb.rpc('local_change_password', params: {
-                'p_identity': identity,
-                'p_current' : current,
-                'p_new'     : next,
-              });
+              final res = await sb.rpc(
+                'local_change_password',
+                params: {
+                  'p_identity': identity,
+                  'p_current': current,
+                  'p_new': next,
+                },
+              );
 
               final ok = (res == true) ||
                   (res is Map && (res['local_change_password'] == true));
@@ -350,13 +468,16 @@ class _SettingsPageState extends State<SettingsPage> {
               }
 
               if (!sheetCtx.mounted) return;
+
               sheetNavigator.pop();
               HapticFeedback.selectionClick();
+
               rootMessenger.showSnackBar(
                 const SnackBar(content: Text('Şifre başarıyla değiştirildi')),
               );
             } on PostgrestException catch (e) {
               final readable = _prettyPostgrestError(e);
+
               await showDialog(
                 context: sheetCtx,
                 builder: (_) => AlertDialog.adaptive(
@@ -379,44 +500,28 @@ class _SettingsPageState extends State<SettingsPage> {
             }
           }
 
-          String strengthLabel(String v) {
-            int score = 0;
-            if (v.length >= 8) score++;
-            if (RegExp(r'[A-Z]').hasMatch(v)) score++;
-            if (RegExp(r'[a-z]').hasMatch(v)) score++;
-            if (RegExp(r'\d').hasMatch(v)) score++;
-            if (RegExp(r'[^\w\s]').hasMatch(v)) score++;
-            switch (score) {
-              case 0:
-              case 1:
-                return 'Çok zayıf';
-              case 2:
-                return 'Zayıf';
-              case 3:
-                return 'Orta';
-              case 4:
-                return 'İyi';
-              default:
-                return 'Güçlü';
-            }
-          }
-
-          final safeBottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
-
           return StatefulBuilder(
             builder: (ctx, setState) {
               final newPwd = newCtrl.text;
+              final safeBottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
+
               return Padding(
                 padding: EdgeInsets.only(bottom: safeBottomInset),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   child: Form(
                     key: formKey,
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 6,
+                            horizontal: 12,
+                          ),
                           decoration: BoxDecoration(
                             color: _kPrimaryTint,
                             borderRadius: BorderRadius.circular(999),
@@ -424,7 +529,11 @@ class _SettingsPageState extends State<SettingsPage> {
                           child: const Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.lock_reset, size: 18, color: _kPrimaryDark),
+                              Icon(
+                                Icons.lock_reset,
+                                size: 18,
+                                color: _kPrimaryDark,
+                              ),
                               SizedBox(width: 8),
                               Text(
                                 'Şifre Değiştir',
@@ -437,6 +546,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                         ),
                         const SizedBox(height: 16),
+
                         TextFormField(
                           controller: currentCtrl,
                           decoration: InputDecoration(
@@ -446,27 +556,42 @@ class _SettingsPageState extends State<SettingsPage> {
                               borderRadius: BorderRadius.circular(14),
                             ),
                             suffixIcon: IconButton(
-                              icon: Icon(obscure1 ? Icons.visibility : Icons.visibility_off),
-                              onPressed: () => setState(() => obscure1 = !obscure1),
+                              icon: Icon(
+                                obscure1
+                                    ? Icons.visibility
+                                    : Icons.visibility_off,
+                              ),
+                              onPressed: () {
+                                setState(() => obscure1 = !obscure1);
+                              },
                             ),
                           ),
                           obscureText: obscure1,
-                          validator: (v) => (v == null || v.isEmpty) ? 'Zorunlu' : null,
+                          validator: (v) =>
+                          (v == null || v.isEmpty) ? 'Zorunlu' : null,
                           textInputAction: TextInputAction.next,
                         ),
                         const SizedBox(height: 12),
+
                         TextFormField(
                           controller: newCtrl,
                           decoration: InputDecoration(
                             labelText: 'Yeni Şifre',
                             prefixIcon: const Icon(Icons.lock),
-                            helperText: newPwd.isEmpty ? null : 'Güç: ${strengthLabel(newPwd)}',
+                            helperText:
+                            newPwd.isEmpty ? null : 'Güç: ${strengthLabel(newPwd)}',
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(14),
                             ),
                             suffixIcon: IconButton(
-                              icon: Icon(obscure2 ? Icons.visibility : Icons.visibility_off),
-                              onPressed: () => setState(() => obscure2 = !obscure2),
+                              icon: Icon(
+                                obscure2
+                                    ? Icons.visibility
+                                    : Icons.visibility_off,
+                              ),
+                              onPressed: () {
+                                setState(() => obscure2 = !obscure2);
+                              },
                             ),
                           ),
                           obscureText: obscure2,
@@ -475,6 +600,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           textInputAction: TextInputAction.next,
                         ),
                         const SizedBox(height: 12),
+
                         TextFormField(
                           controller: confirmCtrl,
                           decoration: InputDecoration(
@@ -484,15 +610,23 @@ class _SettingsPageState extends State<SettingsPage> {
                               borderRadius: BorderRadius.circular(14),
                             ),
                             suffixIcon: IconButton(
-                              icon: Icon(obscure3 ? Icons.visibility : Icons.visibility_off),
-                              onPressed: () => setState(() => obscure3 = !obscure3),
+                              icon: Icon(
+                                obscure3
+                                    ? Icons.visibility
+                                    : Icons.visibility_off,
+                              ),
+                              onPressed: () {
+                                setState(() => obscure3 = !obscure3);
+                              },
                             ),
                           ),
                           obscureText: obscure3,
-                          validator: (v) => (v != newCtrl.text) ? 'Şifreler uyuşmuyor' : null,
+                          validator: (v) =>
+                          (v != newCtrl.text) ? 'Şifreler uyuşmuyor' : null,
                           onFieldSubmitted: (_) => submit(setState),
                         ),
                         const SizedBox(height: 16),
+
                         Row(
                           children: [
                             Expanded(
@@ -504,12 +638,15 @@ class _SettingsPageState extends State<SettingsPage> {
                             const SizedBox(width: 12),
                             Expanded(
                               child: FilledButton(
-                                onPressed: isLoading ? null : () => submit(setState),
+                                onPressed:
+                                isLoading ? null : () => submit(setState),
                                 child: isLoading
                                     ? const SizedBox(
                                   height: 20,
                                   width: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 )
                                     : const Text('Kaydet'),
                               ),
@@ -552,11 +689,13 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               );
             }
+
             if (!snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
-            final meta = (snap.data![0] as ({String version, String appName}));
-            final prof = (snap.data![1] as ({String? name, String? email}));
+
+            final meta = snap.data![0] as ({String version, String appName});
+            final prof = snap.data![1] as ({String? name, String? email});
 
             return CustomScrollView(
               slivers: [
@@ -581,25 +720,36 @@ class _SettingsPageState extends State<SettingsPage> {
                             top: -20,
                             child: Opacity(
                               opacity: .14,
-                              child: Icon(Icons.settings, size: 180, color: Colors.white),
+                              child: Icon(
+                                Icons.settings,
+                                size: 180,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                           Align(
                             alignment: Alignment.bottomLeft,
                             child: Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                              padding:
+                              const EdgeInsets.fromLTRB(16, 0, 16, 20),
                               child: Row(
                                 children: [
                                   CircleAvatar(
                                     radius: 26,
-                                    backgroundColor: Colors.white.withValues(alpha: .2),
-                                    child: const Icon(Icons.person, color: Colors.white, size: 28),
+                                    backgroundColor:
+                                    Colors.white.withValues(alpha: .2),
+                                    child: const Icon(
+                                      Icons.person,
+                                      color: Colors.white,
+                                      size: 28,
+                                    ),
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                      CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           prof.name ?? 'Kullanıcı',
@@ -617,22 +767,39 @@ class _SettingsPageState extends State<SettingsPage> {
                                             prof.email!,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(color: Colors.white.withValues(alpha: .9)),
+                                            style: TextStyle(
+                                              color: Colors.white
+                                                  .withValues(alpha: .9),
+                                            ),
                                           ),
                                         ],
                                         const SizedBox(height: 6),
                                         Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 4,
+                                          ),
                                           decoration: BoxDecoration(
-                                            color: Colors.white.withValues(alpha: .18),
-                                            borderRadius: BorderRadius.circular(999),
+                                            color: Colors.white
+                                                .withValues(alpha: .18),
+                                            borderRadius:
+                                            BorderRadius.circular(999),
                                           ),
                                           child: Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
-                                              const Icon(Icons.verified, size: 16, color: Colors.white),
+                                              const Icon(
+                                                Icons.verified,
+                                                size: 16,
+                                                color: Colors.white,
+                                              ),
                                               const SizedBox(width: 6),
-                                              Text(meta.version, style: const TextStyle(color: Colors.white)),
+                                              Text(
+                                                meta.version,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              ),
                                             ],
                                           ),
                                         ),
@@ -654,12 +821,23 @@ class _SettingsPageState extends State<SettingsPage> {
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                     child: Column(
                       children: [
-                        // Uygulama
                         _SectionCard(
                           title: 'Uygulama',
                           children: [
-                            _SettingTile(icon: Icons.info_outline, title: 'Sürüm', subtitle: meta.version, dense: true),
-                            const _SettingTile(icon: Icons.code, title: 'Geliştirici', subtitle: 'Hasan Hüseyin GENÇ', dense: true),
+                            _SettingTile(
+                              icon: Icons.info_outline,
+                              title: 'Sürüm',
+                              subtitle: meta.version,
+                              dense: true,
+                            ),
+                            _SettingTile(
+                              icon: Icons.language,
+                              title: 'Okul Web Sitesi',
+                              subtitle: 'selcukluanadoluihl.meb.k12.tr',
+                              trailing: const Icon(Icons.open_in_new),
+                              onTap: () =>
+                                  _openUrl(context, _schoolWebsiteUri),
+                            ),
                             _SettingTile(
                               icon: Icons.mail_outline,
                               title: 'Geri Bildirim Gönder',
@@ -669,28 +847,19 @@ class _SettingsPageState extends State<SettingsPage> {
                           ],
                         ),
 
-                        // Sosyal Medya
                         _SectionCard(
                           title: 'Sosyal Medya',
                           children: [
                             _SettingTile(
                               icon: Icons.camera_alt_outlined,
                               title: 'Instagram',
-                              subtitle: '@hashus0420',
+                              subtitle: '@msr_anadoluihl',
                               trailing: const Icon(Icons.open_in_new),
                               onTap: () => _openUrl(context, _instagramUri),
-                            ),
-                            _SettingTile(
-                              icon: Icons.business_center_outlined,
-                              title: 'LinkedIn',
-                              subtitle: 'Hasan Hüseyin GENÇ',
-                              trailing: const Icon(Icons.open_in_new),
-                              onTap: () => _openUrl(context, _linkedinUri),
                             ),
                           ],
                         ),
 
-                        // Bildirimler
                         _SectionCard(
                           title: 'Bildirimler',
                           children: [
@@ -701,14 +870,17 @@ class _SettingsPageState extends State<SettingsPage> {
                               trailing: Switch(
                                 value: _notifEnabled,
                                 onChanged: (v) async {
+                                  final p =
+                                  await SharedPreferences.getInstance();
                                   setState(() => _notifEnabled = v);
-                                  await _savePrefs((p) => p.setBool(_kPrefNotifEnabled, v));
+                                  await p.setBool(_kPrefNotifEnabled, v);
                                 },
                               ),
                               onTap: () async {
+                                final p = await SharedPreferences.getInstance();
                                 final v = !_notifEnabled;
                                 setState(() => _notifEnabled = v);
-                                await _savePrefs((p) => p.setBool(_kPrefNotifEnabled, v));
+                                await p.setBool(_kPrefNotifEnabled, v);
                               },
                             ),
                             _SettingTile(
@@ -722,45 +894,54 @@ class _SettingsPageState extends State<SettingsPage> {
                                 children: [
                                   IconButton(
                                     icon: const Icon(Icons.schedule),
-                                    onPressed: _quietEnabled ? _pickQuietRange : null,
+                                    onPressed:
+                                    _quietEnabled ? _pickQuietRange : null,
                                   ),
                                   Switch(
                                     value: _quietEnabled,
                                     onChanged: (v) async {
+                                      final p =
+                                      await SharedPreferences.getInstance();
                                       setState(() => _quietEnabled = v);
-                                      await _savePrefs((p) => p.setBool(_kPrefQuietEnabled, v));
+                                      await p.setBool(_kPrefQuietEnabled, v);
                                     },
                                   ),
                                 ],
                               ),
-                              onTap: _quietEnabled ? _pickQuietRange : null,
+                              onTap:
+                              _quietEnabled ? _pickQuietRange : null,
                             ),
                             _SettingTile(
                               icon: Icons.today_outlined,
                               title: 'Günlük Özet',
-                              subtitle: _dailySummary ? 'Saat ${_fmtTime(_dailyTime)}' : 'Kapalı',
+                              subtitle: _dailySummary
+                                  ? 'Saat ${_fmtTime(_dailyTime)}'
+                                  : 'Kapalı',
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(
                                     icon: const Icon(Icons.edit),
-                                    onPressed: _dailySummary ? _pickDailyTime : null,
+                                    onPressed:
+                                    _dailySummary ? _pickDailyTime : null,
                                   ),
                                   Switch(
                                     value: _dailySummary,
                                     onChanged: (v) async {
+                                      final p =
+                                      await SharedPreferences.getInstance();
                                       setState(() => _dailySummary = v);
-                                      await _savePrefs((p) => p.setBool(_kPrefDailySummary, v));
+                                      await p.setBool(_kPrefDailySummary, v);
                                     },
                                   ),
                                 ],
                               ),
-                              onTap: _dailySummary ? _pickDailyTime : null,
+                              onTap:
+                              _dailySummary ? _pickDailyTime : null,
                             ),
                           ],
                         ),
 
-                        // Hesap
                         _SectionCard(
                           title: 'Hesap',
                           children: [
@@ -773,7 +954,10 @@ class _SettingsPageState extends State<SettingsPage> {
                             _SettingTile(
                               icon: Icons.logout,
                               title: 'Çıkış Yap',
-                              titleStyle: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
+                              titleStyle: const TextStyle(
+                                color: Colors.red,
+                                fontWeight: FontWeight.w600,
+                              ),
                               leadingBg: Colors.red.withValues(alpha: .12),
                               leadingIconColor: Colors.red,
                               onTap: () => _logout(context),
@@ -793,11 +977,14 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
-/// ---- Reusable ----
 class _SectionCard extends StatelessWidget {
   final String title;
   final List<Widget> children;
-  const _SectionCard({required this.title, required this.children});
+
+  const _SectionCard({
+    required this.title,
+    required this.children,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -805,7 +992,9 @@ class _SectionCard extends StatelessWidget {
       color: _kSurface,
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -860,13 +1049,19 @@ class _SettingTile extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 12, vertical: dense ? 8 : 12),
+        padding: EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: dense ? 8 : 12,
+        ),
         child: Row(
           children: [
             Container(
               width: 42,
               height: 42,
-              decoration: BoxDecoration(color: leadBg, borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                color: leadBg,
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Icon(icon, color: iconColor),
             ),
             const SizedBox(width: 12),
@@ -874,10 +1069,23 @@ class _SettingTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: titleStyle ?? const TextStyle(fontWeight: FontWeight.w600, fontSize: 15.5)),
+                  Text(
+                    title,
+                    style: titleStyle ??
+                        const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15.5,
+                        ),
+                  ),
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
-                    Text(subtitle!, style: TextStyle(color: Colors.grey.shade600, fontSize: 13.2)),
+                    Text(
+                      subtitle!,
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 13.2,
+                      ),
+                    ),
                   ],
                 ],
               ),
